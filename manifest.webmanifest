@@ -1,0 +1,25 @@
+{
+  "name": "AD Smashers Manager",
+  "short_name": "AD Smashers",
+  "description": "Session, court, player, and payment manager for AD Smashers.",
+  "version": "1.0.83",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f0f7f5",
+  "theme_color": "#073f3d",
+  "icons": [
+    {
+      "src": "assets/ad-smashers-logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "assets/ad-smashers-logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

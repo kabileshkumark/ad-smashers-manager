@@ -1,0 +1,110 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isHealthyPlannerMember(plannerId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/planners/$(plannerId)/members/$(request.auth.uid));
+    }
+
+    function isHealthyPlannerAdmin(plannerId) {
+      return isHealthyPlannerMember(plannerId)
+        && get(/databases/$(database)/documents/planners/$(plannerId)/members/$(request.auth.uid)).data.role == "admin";
+    }
+
+    function isAdSmashersBootstrapOwner() {
+      return signedIn() && request.auth.token.email == "admin@adsmashers.app";
+    }
+
+    function isAdSmashersMember() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/adSmashers/main/members/$(request.auth.uid));
+    }
+
+    function adSmashersMember() {
+      return get(/databases/$(database)/documents/adSmashers/main/members/$(request.auth.uid)).data;
+    }
+
+    function isActiveAdSmashersMember() {
+      return isAdSmashersMember() && adSmashersMember().status == "active";
+    }
+
+    function hasAdSmashersRole(role) {
+      return isActiveAdSmashersMember() && adSmashersMember().role == role;
+    }
+
+    function canReadAdSmashers() {
+      return isAdSmashersBootstrapOwner() || isActiveAdSmashersMember();
+    }
+
+    function canWriteAdSmashers() {
+      return isAdSmashersBootstrapOwner()
+        || hasAdSmashersRole("owner")
+        || hasAdSmashersRole("admin")
+        || hasAdSmashersRole("editor");
+    }
+
+    function canManageAdSmashersMembers() {
+      return isAdSmashersBootstrapOwner() || hasAdSmashersRole("owner");
+    }
+
+    function isValidAdSmashersRole(role) {
+      return role == "owner" || role == "admin" || role == "editor" || role == "viewer";
+    }
+
+    function isValidAdSmashersMemberWrite(uid) {
+      return request.resource.data.uid == uid
+        && request.resource.data.email is string
+        && isValidAdSmashersRole(request.resource.data.role)
+        && request.resource.data.status in ["active", "invited", "disabled"];
+    }
+
+    match /planners/{plannerId} {
+      allow read: if isHealthyPlannerMember(plannerId);
+      allow create, update, delete: if isHealthyPlannerAdmin(plannerId);
+
+      match /members/{uid} {
+        allow read: if isHealthyPlannerMember(plannerId);
+        allow create, update, delete: if isHealthyPlannerAdmin(plannerId);
+      }
+
+      match /state/{document} {
+        allow read, write: if isHealthyPlannerMember(plannerId);
+      }
+
+      match /conflicts/{document} {
+        allow read, create: if isHealthyPlannerMember(plannerId);
+        allow update, delete: if isHealthyPlannerAdmin(plannerId);
+      }
+    }
+
+    match /adSmashers/state {
+      allow read: if canReadAdSmashers();
+      allow write: if canWriteAdSmashers();
+    }
+
+    match /adSmashers/main {
+      allow read: if canReadAdSmashers();
+      allow write: if canWriteAdSmashers();
+
+      match /members/{uid} {
+        allow read: if canManageAdSmashersMembers() || (signedIn() && request.auth.uid == uid);
+        allow create, update: if canManageAdSmashersMembers() && isValidAdSmashersMemberWrite(uid);
+        allow delete: if canManageAdSmashersMembers();
+      }
+
+      match /{collection}/{document} {
+        allow read: if collection != "members" && canReadAdSmashers();
+        allow write: if collection != "members" && canWriteAdSmashers();
+      }
+    }
+
+    match /adSmashers/{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,7 @@
+firebase-public/
+.firebase/
+node_modules/
+.DS_Store
+*.log
+firebase-auth-login.txt
+ad-smashers-backup-*.json
