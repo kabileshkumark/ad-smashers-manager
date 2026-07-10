@@ -2,21 +2,24 @@
 
 ## Release
 
-- Version:
-- Date:
-- Owner:
-- Firebase project:
-- Hosting site:
+- Formal version: AD Smashers v1.0
+- Technical build: 1.0.84
+- Date prepared: 2026-07-10
+- Owner: Kabil
+- Firebase project: home-kaish
+- Hosting site: adsmashers
+- Jira epic: SCRUM-5
+- Jira release task: SCRUM-8
 
 ## Pre-Release
 
-- [ ] Git status reviewed.
+- [x] Git status reviewed.
 - [ ] Live data exported/backed up.
-- [ ] Tests pass.
-- [ ] Build passes.
-- [ ] Firebase rules reviewed, if applicable.
+- [x] Tests pass: `npm test` passed 90/90 tests.
+- [x] Build passes: `npm run build` completed.
+- [ ] Firebase rules reviewed, if applicable. See SCRUM-9.
 - [ ] Security review completed for High/Critical apps.
-- [ ] Rollback plan confirmed.
+- [x] Rollback plan drafted.
 
 ## Manual Smoke
 
@@ -32,8 +35,10 @@
 Command:
 
 ```sh
-TBD
+npm run deploy
 ```
+
+Do not deploy until live data backup and shared Firebase rules review are complete.
 
 ## Post-Release
 
@@ -44,8 +49,7 @@ TBD
 
 ## Rollback
 
-- Previous version:
-- Restore command:
-- Backup file:
-- Manual recovery steps:
-
+- Previous version: last deployed AD Smashers build before v1.0
+- Restore command: rebuild and redeploy previous Git commit if smoke test fails
+- Backup file: required before deploy
+- Manual recovery steps: restore exported state only if release causes data corruption
