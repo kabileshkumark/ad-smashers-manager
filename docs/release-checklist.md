@@ -2,7 +2,7 @@
 
 ## Release
 
-- Formal version: AD Smashers v1.0
+- Formal version: Version 1.0
 - Technical build: 1.0.84
 - Date prepared: 2026-07-10
 - Owner: Kabil
