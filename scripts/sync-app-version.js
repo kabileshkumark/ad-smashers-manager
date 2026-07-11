@@ -3,10 +3,15 @@ const path = require("path");
 
 const root = path.resolve(__dirname, "..");
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-const version = String(packageJson.version || "").trim();
+const packageVersion = String(packageJson.version || "").trim();
+const version = String(packageJson.appVersion || packageVersion).trim();
 
-if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
-  throw new Error(`Invalid package version "${version}". Use semantic versioning, for example 1.0.0.`);
+if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(packageVersion)) {
+  throw new Error(`Invalid npm package version "${packageVersion}". Use semantic versioning, for example 1.0.0.`);
+}
+
+if (!/^\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
+  throw new Error(`Invalid app version "${version}". Use a release version such as 1.0 or 1.0.0.`);
 }
 
 const cacheName = `ad-smashers-manager-v${version}`;

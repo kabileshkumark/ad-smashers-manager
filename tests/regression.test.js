@@ -1196,6 +1196,35 @@ test("adding an attendance-only player does not lock voter attendance or add a v
   assert.deepEqual(jsonValue(context, "effectiveAttendedPlayerIds(state.sessions[0])"), ["p2", "p3", "p4"]);
 });
 
+test("extra confirmed players can be added after attendance is manually controlled", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("p1", "Confirmed Voter"), player("p2", "Removed Voter"), player("p3", "Extra Player")],
+      sessions: [
+        baseSession({
+          id: "session-a",
+          expectedPlayers: 2,
+          attendanceManual: true,
+          attendedPlayerIds: ["p1"],
+          responses: [
+            { id: "response-1", playerId: "p1", voteOrder: 1, attendanceChoice: "in", guestCount: 0, racketNeeded: false, rawOptions: ["I'm in"] },
+            { id: "response-2", playerId: "p2", voteOrder: 2, attendanceChoice: "in", guestCount: 0, racketNeeded: false, rawOptions: ["I'm in"] }
+          ]
+        })
+      ]
+    })
+  );
+
+  assert.equal(run(context, 'addManualAttendedPlayer(state.sessions[0], "p3")'), true);
+
+  assert.deepEqual(jsonValue(context, "state.sessions[0].manualAttendedPlayerIds"), ["p3"]);
+  assert.deepEqual(jsonValue(context, "state.sessions[0].attendedPlayerIds"), ["p1", "p3"]);
+  assert.deepEqual(jsonValue(context, "effectiveAttendedEntries(state.sessions[0]).map((entry) => entry.name)"), ["Confirmed Voter", "Extra Player"]);
+  assert.deepEqual(jsonValue(context, "Object.keys(state.sessions[0].payments).sort()"), ["p1", "p3"]);
+});
+
 test("poll players can have more than two admin-added guests and payments scale", () => {
   const context = createAppContext();
   setAppState(
@@ -2859,13 +2888,13 @@ test("modal values stay left aligned and focused fields scroll above mobile keyb
   assert.equal(context.__modalScrollOptions[0].behavior, "smooth");
 });
 
-test("app shell version is consistent with package release version", () => {
+test("app shell version is consistent with the configured technical build", () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
   const indexHtml = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
   const sw = fs.readFileSync(path.join(ROOT, "sw.js"), "utf8");
   const config = fs.readFileSync(path.join(ROOT, "js", "config.js"), "utf8");
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.webmanifest"), "utf8"));
-  const version = packageJson.version;
+  const version = packageJson.appVersion || packageJson.version;
   const cacheMatch = sw.match(/CACHE_NAME\s*=\s*"ad-smashers-manager-v([^"]+)"/);
   const appVersionMatch = config.match(/APP_VERSION\s*=\s*"([^"]+)"/);
   assert.ok(cacheMatch, "service worker cache name should include release version");
@@ -2875,11 +2904,11 @@ test("app shell version is consistent with package release version", () => {
   const swVersions = [...sw.matchAll(/\?v=([^"']+)/g)].map((match) => decodeURIComponent(match[1]));
   assert.ok(indexVersions.length > 0, "index.html should version every app asset");
   assert.ok(swVersions.length > 0, "service worker should version every cached app asset");
-  assert.equal(cacheMatch[1], version, "service worker cache version should match package.json");
-  assert.equal(appVersionMatch[1], version, "config app version should match package.json");
-  assert.equal(manifest.version, version, "manifest version should match package.json");
-  assert.ok(indexVersions.every((item) => item === version), "index.html asset versions should match package.json");
-  assert.ok(swVersions.every((item) => item === version), "service worker asset versions should match package.json");
+  assert.equal(cacheMatch[1], version, "service worker cache version should match package.json appVersion");
+  assert.equal(appVersionMatch[1], version, "config app version should match package.json appVersion");
+  assert.equal(manifest.version, version, "manifest version should match package.json appVersion");
+  assert.ok(indexVersions.every((item) => item === version), "index.html asset versions should match package.json appVersion");
+  assert.ok(swVersions.every((item) => item === version), "service worker asset versions should match package.json appVersion");
 });
 
 test("manual update check clears every app cache and notifies the service worker", async () => {
@@ -2959,19 +2988,55 @@ test("pending local cloud state survives refresh before debounced save", async (
   assert.ok(context.localStorage.getItem("ad-smashers-pending-cloud-state-v1"));
 });
 
+test("pending cloud restore tolerates null change journals from older saves", async () => {
+  const context = createAppContext();
+  const cloudState = baseFixture({
+    sessions: [baseSession({ id: "session-cloud", date: "2026-07-10", stage: "Draft" })]
+  });
+  const pendingState = baseFixture({
+    sessions: [baseSession({ id: "session-local", date: "2026-07-11", stage: "Poll Live" })]
+  });
+  context.localStorage.setItem(
+    "ad-smashers-pending-cloud-state-v1",
+    JSON.stringify({
+      appVersion: "1.0.83",
+      schemaVersion: 1,
+      savedAt: "2026-07-03T04:01:00.000Z",
+      savedAtMs: Date.parse("2026-07-03T04:01:00.000Z"),
+      baseVersion: 7,
+      baseUpdateTime: "2026-07-03T04:00:00.000000Z",
+      clientId: "client-local",
+      userId: "test-uid",
+      email: "admin@adsmashers.app",
+      changes: null,
+      state: pendingState
+    })
+  );
+  context.fetch = structuredFetchForState(cloudState, 7, "2026-07-03T04:00:00.000000Z");
+
+  const loaded = await run(context, "loadCloudState()");
+
+  assert.deepEqual(Array.from(loaded.sessions, (item) => item.id), ["session-local"]);
+  assert.equal(loaded.sessions[0].stage, "Poll Live");
+  assert.equal(run(context, "pendingCloudChangesHaveEntries(null)"), false);
+  assert.equal(run(context, "patchHasEntries(null)"), false);
+  assert.equal(run(context, "cloudStateNeedsMigrationSave"), true);
+});
+
 test("pending local change journal replays over newer cloud data from another device", async () => {
   const context = createAppContext();
+  const raceDate = isoDateFromToday(7);
   const baseCloudState = baseFixture({
     players: [player("p1", "Original Player")],
-    sessions: [baseSession({ id: "session-race", date: "2026-07-10", stage: "Payment Collection" })]
+    sessions: [baseSession({ id: "session-race", date: raceDate, stage: "Payment Collection" })]
   });
   const newerCloudState = baseFixture({
     players: [player("p1", "Original Player"), player("p2", "Other Device Player")],
-    sessions: [baseSession({ id: "session-race", date: "2026-07-10", stage: "Completed" })]
+    sessions: [baseSession({ id: "session-race", date: raceDate, stage: "Completed" })]
   });
   const pendingState = baseFixture({
     players: [{ ...player("p1", "Locally Renamed Player"), phone: "12345" }],
-    sessions: [baseSession({ id: "session-race", date: "2026-07-10", stage: "Payment Collection", waterCost: 12 })]
+    sessions: [baseSession({ id: "session-race", date: raceDate, stage: "Payment Collection", waterCost: 12 })]
   });
   setCloudBaseState(context, baseCloudState);
   setAppState(context, pendingState);

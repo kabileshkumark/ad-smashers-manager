@@ -638,6 +638,7 @@ function collectObjectPatch(baseValue, nextValue, path, patch) {
 }
 
 function patchHasEntries(patch = {}) {
+  if (!isPlainPatchObject(patch)) return false;
   return Boolean((patch.set || []).length || (patch.delete || []).length);
 }
 
@@ -731,10 +732,12 @@ function collectionIndexById(items = []) {
 }
 
 function collectionChangeHasEntries(change = {}) {
+  if (!isPlainPatchObject(change)) return false;
   return Boolean((change.upsert || []).length || (change.patch || []).length || (change.delete || []).length || (change.order || []).length);
 }
 
 function pendingCloudChangesHaveEntries(changes = {}) {
+  if (!isPlainPatchObject(changes)) return false;
   return Boolean(
     patchHasEntries(changes.settings)
       || patchHasEntries(changes.advances)
@@ -743,6 +746,7 @@ function pendingCloudChangesHaveEntries(changes = {}) {
 }
 
 function replayPendingCloudChanges(cloudState, changes = {}) {
+  changes = isPlainPatchObject(changes) ? changes : {};
   const nextState = cloneCloudStateValue(cloudState || emptyState());
   if (patchHasEntries(changes.settings)) {
     nextState.settings = applyObjectPatch(nextState.settings || {}, changes.settings);

@@ -41,7 +41,7 @@ The regression suite in `tests/regression.test.js` loads the same browser JavaSc
 - Overpayments become advance credit.
 - Session selection keeps one scroll surface, so tapping a session arrow does not reset page scroll.
 - Android WhatsApp links target WhatsApp Business.
-- `package.json` is the release-version source of truth; `index.html`, `sw.js`, `manifest.webmanifest`, and `js/config.js` use the same semantic version for cache/update consistency.
+- `package.json` is the version source of truth: npm metadata uses `version`, while the PWA technical build uses `appVersion`. `index.html`, `sw.js`, `manifest.webmanifest`, and `js/config.js` use the same `appVersion` for cache/update consistency.
 - Firestore cloud sync uses the single state document with versioned commit saves:
   - loading records the cloud document version,
   - saves use the previous Firestore update time as a precondition,

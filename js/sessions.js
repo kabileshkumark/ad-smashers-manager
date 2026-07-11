@@ -95,7 +95,9 @@ function setManualAttendedPlayerIds(session, playerIds = []) {
 
 function effectiveAttendedPlayerIds(session, playersList = state.players) {
   const savedIds = storedAttendedPlayerIds(session);
-  if (session.attendanceManual === true && Array.isArray(session.attendedPlayerIds)) return savedIds;
+  if (session.attendanceManual === true && Array.isArray(session.attendedPlayerIds)) {
+    return uniqueIds([...savedIds, ...manualAttendedPlayerIds(session, playersList)]);
+  }
   return uniqueIds([...defaultAttendedPlayerIds(session, playersList), ...manualAttendedPlayerIds(session, playersList)]);
 }
 

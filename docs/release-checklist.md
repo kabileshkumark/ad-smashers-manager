@@ -3,21 +3,20 @@
 ## Release
 
 - Formal version: Version 1.0
-- Technical build: 1.0.84
+- Technical build: 1.0
 - Date prepared: 2026-07-10
 - Owner: Kabil
 - Firebase project: home-kaish
 - Hosting site: adsmashers
-- Jira epic: SCRUM-5
-- Jira release task: SCRUM-8
+- Jira release task: ADS-2
 
 ## Pre-Release
 
 - [x] Git status reviewed.
 - [ ] Live data exported/backed up.
-- [x] Tests pass: `npm test` passed 90/90 tests.
+- [x] Tests pass: `npm test` passed 91/91 tests.
 - [x] Build passes: `npm run build` completed.
-- [ ] Firebase rules reviewed, if applicable. See SCRUM-9.
+- [ ] Firebase rules reviewed, if applicable. See ADS-4.
 - [ ] Security review completed for High/Critical apps.
 - [x] Rollback plan drafted.
 
