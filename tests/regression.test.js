@@ -2961,11 +2961,13 @@ test("cloud load records Firestore document version metadata", async () => {
 
 test("pending local cloud state survives refresh before debounced save", async () => {
   const context = createAppContext();
+  const cloudSessionDate = isoDateFromToday(6);
+  const pendingSessionDate = isoDateFromToday(7);
   const cloudState = baseFixture({
-    sessions: [baseSession({ id: "session-cloud", date: "2026-07-10", stage: "Draft" })]
+    sessions: [baseSession({ id: "session-cloud", date: cloudSessionDate, stage: "Draft" })]
   });
   const pendingState = baseFixture({
-    sessions: [baseSession({ id: "session-local", date: "2026-07-11", stage: "Poll Live" })]
+    sessions: [baseSession({ id: "session-local", date: pendingSessionDate, stage: "Poll Live" })]
   });
   setCloudBaseState(context, cloudState);
   setAppState(context, pendingState);
@@ -2990,11 +2992,13 @@ test("pending local cloud state survives refresh before debounced save", async (
 
 test("pending cloud restore tolerates null change journals from older saves", async () => {
   const context = createAppContext();
+  const cloudSessionDate = isoDateFromToday(6);
+  const pendingSessionDate = isoDateFromToday(7);
   const cloudState = baseFixture({
-    sessions: [baseSession({ id: "session-cloud", date: "2026-07-10", stage: "Draft" })]
+    sessions: [baseSession({ id: "session-cloud", date: cloudSessionDate, stage: "Draft" })]
   });
   const pendingState = baseFixture({
-    sessions: [baseSession({ id: "session-local", date: "2026-07-11", stage: "Poll Live" })]
+    sessions: [baseSession({ id: "session-local", date: pendingSessionDate, stage: "Poll Live" })]
   });
   context.localStorage.setItem(
     "ad-smashers-pending-cloud-state-v1",
