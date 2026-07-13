@@ -541,6 +541,15 @@ function reducePlayerAdvance(playerId, amount) {
   }
 }
 
+function reducePlayerCredit(playerId, amount) {
+  const requestedAmount = Number(amount || 0);
+  if (!playerId || !Number.isFinite(requestedAmount) || requestedAmount <= 0) return 0;
+  const creditUsed = Math.min(playerRemainingCredit(playerId), requestedAmount);
+  if (creditUsed <= 0) return 0;
+  reducePlayerAdvance(playerId, creditUsed);
+  return Number(creditUsed.toFixed(2));
+}
+
 function playerPaymentCorrectionItems(playerId) {
   const sessionItems = sortSessions()
     .filter((session) => sessionIsCollectible(session))
@@ -919,7 +928,10 @@ function playerPaymentTransactionCopyLines(playerId) {
       const group = getPaymentGroup(transaction.groupId);
       const allocations = (transaction.allocations || []).filter((allocation) => allocation.playerId === playerId);
       const applied = allocations
-        .filter((allocation) => allocation.type !== "advance")
+        .filter((allocation) => allocation.type === "session" || allocation.type === "activity")
+        .reduce((total, allocation) => total + Number(allocation.amount || 0), 0);
+      const creditUsed = allocations
+        .filter((allocation) => allocation.type === "credit-use")
         .reduce((total, allocation) => total + Number(allocation.amount || 0), 0);
       const advance = allocations
         .filter((allocation) => allocation.type === "advance")
@@ -929,9 +941,17 @@ function playerPaymentTransactionCopyLines(playerId) {
       }
       const details = [`Paid by ${getPlayerName(transaction.paidById)}`];
       if (applied) details.push(`Applied ${currency(applied)}`);
-      if (advance) details.push(`Advance ${currency(advance)}`);
+      if (creditUsed) details.push(`Credit used ${currency(creditUsed)}`);
+      if (advance) details.push(`Credit added ${currency(advance)}`);
       return `- ${formatDate(transaction.date)} ${group?.name || "Group payment"}: ${details.join(", ")}`;
     });
+}
+
+function paymentTransactionCreditUsed(transaction) {
+  return Number((transaction?.allocations || [])
+    .filter((allocation) => allocation.type === "credit-use")
+    .reduce((total, allocation) => total + Number(allocation.amount || 0), 0)
+    .toFixed(2));
 }
 
 function paymentGroupTransactionCopyLines(groupId = "") {
@@ -939,11 +959,13 @@ function paymentGroupTransactionCopyLines(groupId = "") {
     const payerName = getPlayerName(transaction.paidById);
     const coveredNames = uniqueIds(transaction.playerIds || []).map(getPlayerName).filter(Boolean);
     const coveredLabel = coveredNames.length ? ` for ${coveredNames.join(", ")}` : "";
+    const creditUsed = paymentTransactionCreditUsed(transaction);
     const details = [
-      `Paid ${currency(transaction.amountPaid)}`,
+      `Cash paid ${currency(transaction.amountPaid)}`,
       `Applied ${currency(Number(transaction.appliedAmount || 0))}`
     ];
-    if (Number(transaction.advanceAmount || 0)) details.push(`Advance ${currency(transaction.advanceAmount)}`);
+    if (creditUsed) details.push(`Credit used ${currency(creditUsed)}`);
+    if (Number(transaction.advanceAmount || 0)) details.push(`Credit added ${currency(transaction.advanceAmount)}`);
     return `- ${formatDate(transaction.date)}: Paid by ${payerName}${coveredLabel}, ${details.join(", ")}`;
   });
 }
@@ -991,8 +1013,18 @@ function getPaymentGroup(groupId = "") {
   return (state?.paymentGroups || []).find((group) => group.id === groupId) || null;
 }
 
+function paymentGroupGrossBalance(group) {
+  return groupPlayerIdsTotal(paymentGroupPlayerIds(group), playerBalance);
+}
+
+function paymentGroupPayerCreditOffset(group) {
+  const grossBalance = paymentGroupGrossBalance(group);
+  if (!group?.payerId || grossBalance <= 0) return 0;
+  return Math.min(grossBalance, playerRemainingCredit(group.payerId));
+}
+
 function paymentGroupBalance(group) {
-  return paymentGroupPlayerIds(group).reduce((total, playerId) => total + playerBalance(playerId), 0);
+  return Math.max(0, Number((paymentGroupGrossBalance(group) - paymentGroupPayerCreditOffset(group)).toFixed(2)));
 }
 
 function paymentGroupPlayerIds(group) {
@@ -1132,13 +1164,19 @@ function applyGroupPaymentForPlayer(playerId, amount) {
 function applyGroupPayment({ paidById, playerIds, amountPaid, groupId = "" }) {
   const selectedIds = uniqueIds(playerIds).filter((playerId) => getPlayer(playerId)?.active !== false);
   const paidAmount = Number(amountPaid || 0);
-  if (!paidById || !selectedIds.length || !Number.isFinite(paidAmount) || paidAmount <= 0) {
+  if (!paidById || !selectedIds.length || !Number.isFinite(paidAmount) || paidAmount < 0) {
     return { applied: 0, remaining: Math.max(0, paidAmount || 0), allocations: [] };
   }
   let applied = 0;
   const allocations = [];
   const balanceByPlayer = new Map(selectedIds.map((playerId) => [playerId, playerBalance(playerId)]));
-  const dueSplit = splitAmountAcrossPlayerBalances(selectedIds, paidAmount, balanceByPlayer);
+  const groupDue = groupPlayerIdsTotal(selectedIds, (playerId) => balanceByPlayer.get(playerId));
+  const availableCredit = Math.min(groupDue, playerRemainingCredit(paidById));
+  const fundingAmount = Number((paidAmount + availableCredit).toFixed(2));
+  if (fundingAmount <= 0) {
+    return { applied: 0, creditUsed: 0, remaining: 0, allocations: [] };
+  }
+  const dueSplit = splitAmountAcrossPlayerBalances(selectedIds, fundingAmount, balanceByPlayer);
 
   dueSplit.allocations.forEach((share) => {
     const result = applyGroupPaymentForPlayer(share.playerId, share.amount);
@@ -1146,7 +1184,12 @@ function applyGroupPayment({ paidById, playerIds, amountPaid, groupId = "" }) {
     allocations.push(...result.allocations);
   });
 
-  const creditTotal = Math.max(0, Number((paidAmount - applied).toFixed(2)));
+  const creditUsed = reducePlayerCredit(paidById, Math.min(availableCredit, applied));
+  if (creditUsed > 0) {
+    allocations.push({ type: "credit-use", playerId: paidById, amount: creditUsed });
+  }
+  const cashApplied = Math.max(0, Number((applied - creditUsed).toFixed(2)));
+  const creditTotal = Math.max(0, Number((paidAmount - cashApplied).toFixed(2)));
   if (creditTotal > 0) {
     addPlayerAdvance(paidById, creditTotal);
     allocations.push({ type: "advance", playerId: paidById, amount: creditTotal });
@@ -1165,7 +1208,13 @@ function applyGroupPayment({ paidById, playerIds, amountPaid, groupId = "" }) {
   };
   state.paymentTransactions = state.paymentTransactions || [];
   state.paymentTransactions.push(transaction);
-  return { applied: Number(applied.toFixed(2)), remaining: Number(creditTotal.toFixed(2)), allocations, transaction };
+  return {
+    applied: Number(applied.toFixed(2)),
+    creditUsed,
+    remaining: Number(creditTotal.toFixed(2)),
+    allocations,
+    transaction
+  };
 }
 
 function reversePaymentAllocation(allocation) {
@@ -1187,6 +1236,10 @@ function reversePaymentAllocation(allocation) {
     if (!share) return;
     share.paidAmount = Math.max(0, Number(share.paidAmount || 0) - amount);
     share.status = share.paidAmount <= 0 ? "Pending" : share.paidAmount >= Number(share.amount || 0) ? "Paid" : "Partial";
+    return;
+  }
+  if (allocation.type === "credit-use") {
+    addPlayerAdvance(allocation.playerId, amount);
     return;
   }
   if (allocation.type === "advance") {

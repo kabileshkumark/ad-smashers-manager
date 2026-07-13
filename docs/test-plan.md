@@ -38,7 +38,9 @@ The regression suite in `tests/regression.test.js` loads the same browser JavaSc
   - advance-credit players next,
   - clear players last.
 - Saved payment groups can include named guests and keep those guest names in the group member summary.
-- Overpayments become advance credit.
+- Post-game overpayments become Credit owned only by the payer.
+- A payment-group payer's remaining Credit reduces the group's cash payable amount, is consumed before new cash, and is restored exactly if that group-payment transaction is deleted.
+- Intentional Advance remains in the Advance section and does not transfer to other payment-group members.
 - Session selection keeps one scroll surface, so tapping a session arrow does not reset page scroll.
 - Android WhatsApp links target WhatsApp Business.
 - `package.json` is the version source of truth: npm metadata uses `version`, while the PWA technical build uses `appVersion`. `index.html`, `sw.js`, `manifest.webmanifest`, and `js/config.js` use the same `appVersion` for cache/update consistency.
@@ -62,8 +64,10 @@ After `npm test` passes, check these once in the app for larger UI or deployment
 - Open a Friday, Saturday, and FlexiDay session WhatsApp icon; each should use its configured group.
 - Open Payments:
   - due players should appear first,
-  - advance-credit players should appear after dues,
+  - players with positive Credit should appear after dues,
   - clear players should appear last.
+  - for a group payer with remaining Credit and another member with a due, confirm the group shows the net cash payable amount,
+  - apply the group payment and confirm Credit is used before cash, the member due clears, and payment history records the Credit used.
 - Verify bottom navigation remains visible and usable on mobile.
 - Verify no page zoom is possible in the installed PWA.
 

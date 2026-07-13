@@ -1175,16 +1175,17 @@ async function handleSubmit(event) {
       render();
       return;
     }
-    if (!Number.isFinite(amountPaid) || amountPaid <= 0) {
-      showToast("Enter the amount paid.");
+    if (!Number.isFinite(amountPaid) || amountPaid < 0) {
+      showToast("Enter a valid amount paid.");
       render();
       return;
     }
     const result = applyGroupPayment({ paidById: group.payerId, playerIds, amountPaid, groupId: group.id });
     saveState();
     const appliedText = result.applied > 0 ? `Applied ${currency(result.applied)}.` : "";
-    const advanceText = result.remaining > 0 ? ` ${currency(result.remaining)} added as advance for selected players.` : "";
-    showToast(`${appliedText}${advanceText}`.trim() || "Group payment saved.");
+    const creditUsedText = result.creditUsed > 0 ? ` Used ${currency(result.creditUsed)} Credit for ${getPlayerName(group.payerId)}.` : "";
+    const creditAddedText = result.remaining > 0 ? ` ${currency(result.remaining)} added as Credit for ${getPlayerName(group.payerId)}.` : "";
+    showToast(`${appliedText}${creditUsedText}${creditAddedText}`.trim() || "No payment or payer Credit was available to apply.");
   }
 
   if (formType === "group-payment") {
@@ -1202,8 +1203,8 @@ async function handleSubmit(event) {
       render();
       return;
     }
-    if (!Number.isFinite(amountPaid) || amountPaid <= 0) {
-      showToast("Enter the amount paid.");
+    if (!Number.isFinite(amountPaid) || amountPaid < 0) {
+      showToast("Enter a valid amount paid.");
       render();
       return;
     }
@@ -1226,8 +1227,9 @@ async function handleSubmit(event) {
     groupPaymentDraft = createGroupPaymentDraft();
     saveState();
     const appliedText = result.applied > 0 ? `Applied ${currency(result.applied)}.` : "";
-    const advanceText = result.remaining > 0 ? ` ${currency(result.remaining)} added as advance for selected players.` : "";
-    showToast(`${appliedText}${advanceText}`.trim() || "Group payment saved.");
+    const creditUsedText = result.creditUsed > 0 ? ` Used ${currency(result.creditUsed)} Credit for ${getPlayerName(paidById)}.` : "";
+    const creditAddedText = result.remaining > 0 ? ` ${currency(result.remaining)} added as Credit for ${getPlayerName(paidById)}.` : "";
+    showToast(`${appliedText}${creditUsedText}${creditAddedText}`.trim() || "No payment or payer Credit was available to apply.");
   }
 
   if (formType === "payment-group") {
