@@ -3370,13 +3370,14 @@ body.is-scrolling-content .bottom-nav {
   }
 
   .player-balance-row .row-main {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
     align-items: start;
   }
 
   .player-balance-actions {
     grid-template-columns: 54px repeat(3, 40px);
     gap: 6px;
+    justify-self: end;
   }
 
   .player-balance-actions .btn.icon-only {

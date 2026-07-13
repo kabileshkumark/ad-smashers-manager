@@ -401,7 +401,9 @@ function syncSessionPayments(session, players = state.players, settings = state.
         notes: ""
       };
     } else {
-      session.payments[playerId].method = method;
+      const hasRecordedPayment = Number(session.payments[playerId].paidAmount || 0) > 0
+        || Number(session.payments[playerId].advanceAmount || 0) > 0;
+      if (!hasRecordedPayment) session.payments[playerId].method = method;
       session.payments[playerId].amount = amount;
       session.payments[playerId].units = units;
       session.payments[playerId].chargeableUnits = chargeableUnits;
@@ -417,7 +419,9 @@ function syncSessionPayments(session, players = state.players, settings = state.
   });
   players.forEach((player) => {
     if (!playerIds.includes(player.id)) {
-      delete session.payments[player.id];
+      const payment = session.payments[player.id];
+      const hasRecordedPayment = Number(payment?.paidAmount || 0) > 0 || Number(payment?.advanceAmount || 0) > 0;
+      if (!hasRecordedPayment) delete session.payments[player.id];
     }
   });
 }
@@ -466,8 +470,17 @@ function reorderSessionResponses(session, responseIds = []) {
 }
 
 function updateSessionPerPersonAmount(session, amount) {
-  session.perPersonAmount = Number(amount || 0);
+  const nextAmount = Number(amount || 0);
+  if (
+    Number(session?.perPersonAmount || 0) !== nextAmount
+    && typeof sessionHasActiveFinancialState === "function"
+    && sessionHasActiveFinancialState(session)
+  ) {
+    return false;
+  }
+  session.perPersonAmount = nextAmount;
   syncSessionPayments(session);
+  return true;
 }
 
 function paymentDueAmount(payment, session) {

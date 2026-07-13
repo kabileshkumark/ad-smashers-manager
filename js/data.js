@@ -69,6 +69,7 @@ function migrateState(data = {}, options = {}) {
       .filter(([playerId, amount]) => playerIds.has(playerId) && amount > 0)
   );
   assignGroupPaymentCreditsToPayers(migrated);
+  migrateLegacyCreditUseTransactions(migrated);
   const previousState = state;
   state = migrated;
   migrated.sessions.forEach((session) => applyAutomaticSessionStage(session));
@@ -328,14 +329,27 @@ function normalizePaymentTransaction(transaction, players = state?.players || []
   return {
     id: transaction?.id || createId("payment-transaction"),
     type: transaction?.type || "group-payment",
+    separateAdvance: transaction?.separateAdvance === true,
     date: transaction?.date || new Date().toISOString().slice(0, 10),
+    createdAt: transaction?.createdAt || "",
     paidById: activeIds.has(transaction?.paidById) ? transaction.paidById : "",
     groupId: transaction?.groupId || "",
     playerIds: uniqueIds(transaction?.playerIds || allocations.map((allocation) => allocation.playerId)).filter((id) => activeIds.has(id)),
     amountPaid: Number(transaction?.amountPaid || 0),
     appliedAmount: Number(transaction?.appliedAmount || 0),
     advanceAmount: Number(transaction?.advanceAmount || 0),
-    allocations
+    allocations,
+    status: transaction?.status === "reversed" || transaction?.reversedAt
+      ? "reversed"
+      : transaction?.status === "migrated" ? "migrated" : "active",
+    reversedAt: transaction?.reversedAt || "",
+    sessionId: transaction?.sessionId || "",
+    activityId: transaction?.activityId || "",
+    source: transaction?.source || "",
+    legacyCreditUseMigrated: transaction?.legacyCreditUseMigrated === true,
+    migratedCreditAmount: Number(transaction?.migratedCreditAmount || 0),
+    previousPayment: transaction?.previousPayment ? { ...transaction.previousPayment } : null,
+    nextPayment: transaction?.nextPayment ? { ...transaction.nextPayment } : null
   };
 }
 
@@ -386,6 +400,11 @@ function updateResponseVote(sessionId, responseId, attendanceChoice) {
   const session = getSession(sessionId);
   const response = session?.responses?.find((item) => item.id === responseId);
   if (!response) return;
+  if (typeof sessionPlayerHasActiveFinancialState === "function" && sessionPlayerHasActiveFinancialState(session, response.playerId)) {
+    showToast("Clear this player's active cash, Advance, or Credit coverage before changing their vote.");
+    render();
+    return false;
+  }
   response.attendanceChoice = POLL_VOTE_OPTIONS.includes(attendanceChoice) ? attendanceChoice : "in";
   response.guestCount = guestCountForVote(response.attendanceChoice);
   response.racketNeeded = false;
@@ -395,6 +414,7 @@ function updateResponseVote(sessionId, responseId, attendanceChoice) {
   applyAutomaticSessionStage(session);
   saveState();
   render();
+  return true;
 }
 
 function attendanceChoiceForGuestCount(guestCount) {
@@ -434,6 +454,7 @@ function addResponseGuest(session, responseId) {
   const response = session?.responses?.find((item) => item.id === responseId);
   const currentCount = Number(response?.guestCount || 0);
   if (!response) return false;
+  if (typeof sessionPlayerHasActiveFinancialState === "function" && sessionPlayerHasActiveFinancialState(session, response.playerId)) return false;
   const nextCount = currentCount + 1;
   setResponseGuestCount(response, nextCount);
   restoreResponseGuestAttendance(session, response.id, nextCount);
@@ -445,6 +466,7 @@ function addResponseGuest(session, responseId) {
 function removeResponseGuest(session, responseId) {
   const response = session?.responses?.find((item) => item.id === responseId);
   if (!response || Number(response.guestCount || 0) <= 0) return false;
+  if (typeof sessionPlayerHasActiveFinancialState === "function" && sessionPlayerHasActiveFinancialState(session, response.playerId)) return false;
   const nextCount = Number(response.guestCount || 0) - 1;
   setResponseGuestCount(response, nextCount);
   pruneRemovedGuestsForResponse(session, response.id, nextCount);
@@ -489,7 +511,9 @@ function restoreManualGuestAttendance(session, playerId, guestIndex) {
 
 function setManualGuestCount(session, playerId, guestCount) {
   if (!session || !playerId) return false;
+  const currentCount = manualGuestCount(session, playerId);
   const count = Math.max(0, Math.floor(Number(guestCount || 0)));
+  if (count !== currentCount && typeof sessionPlayerHasActiveFinancialState === "function" && sessionPlayerHasActiveFinancialState(session, playerId)) return false;
   const counts = ensureManualGuestCounts(session);
   if (count > 0) {
     counts[playerId] = count;
@@ -506,6 +530,7 @@ function clearManualGuestCount(session, playerId) {
 
 function addManualAttendanceGuest(session, playerId) {
   if (!session || !playerId) return false;
+  if (typeof sessionPlayerHasActiveFinancialState === "function" && sessionPlayerHasActiveFinancialState(session, playerId)) return false;
   if (!effectiveAttendedPlayerIds(session).includes(playerId)) {
     setManualAttendedPlayerIds(session, [...manualAttendedPlayerIds(session), playerId]);
   }

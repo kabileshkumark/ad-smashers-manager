@@ -89,6 +89,6 @@ function sessionStats(session) {
     pendingCount: payments.filter((payment) => paymentEffectiveStatus(session, payment) !== "Paid").length,
     pendingAmount: payments
       .filter((payment) => paymentEffectiveStatus(session, payment) !== "Paid")
-      .reduce((total, payment) => total + paymentOutstandingAfterAdvance(payment, session), 0)
+      .reduce((total, payment) => total + paymentOutstandingAfterCoverage(payment, session), 0)
   };
 }
