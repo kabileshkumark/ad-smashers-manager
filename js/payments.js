@@ -1031,35 +1031,36 @@ function adjustStateAdvanceBalance(targetState, playerId, delta) {
   }
 }
 
-function assignGroupPaymentAdvancesToPayers(targetState = state) {
+function assignGroupPaymentCreditsToPayers(targetState = state) {
   const playerIds = new Set((targetState.players || []).map((player) => player.id));
   (targetState.paymentTransactions || []).forEach((transaction) => {
     if (transaction.type !== "group-payment") return;
     const payerId = String(transaction.paidById || "");
     if (!payerId || !playerIds.has(payerId)) return;
     const allocations = transaction.allocations || [];
-    const advanceAllocations = allocations.filter((allocation) => allocation.type === "advance" && Number(allocation.amount || 0) > 0);
-    const advanceTotal = Number(advanceAllocations.reduce((total, allocation) => total + Number(allocation.amount || 0), 0).toFixed(2));
-    if (advanceTotal <= 0) return;
+    // Group credit retains the legacy "advance" schema fields for backup compatibility.
+    const creditAllocations = allocations.filter((allocation) => allocation.type === "advance" && Number(allocation.amount || 0) > 0);
+    const creditTotal = Number(creditAllocations.reduce((total, allocation) => total + Number(allocation.amount || 0), 0).toFixed(2));
+    if (creditTotal <= 0) return;
 
     const currentByPlayer = new Map();
-    advanceAllocations.forEach((allocation) => {
+    creditAllocations.forEach((allocation) => {
       currentByPlayer.set(allocation.playerId, Number(((currentByPlayer.get(allocation.playerId) || 0) + Number(allocation.amount || 0)).toFixed(2)));
     });
-    const alreadyAssignedToPayer = advanceAllocations.length === 1
-      && advanceAllocations[0].playerId === payerId
-      && Number(advanceAllocations[0].amount || 0) === advanceTotal;
+    const alreadyAssignedToPayer = creditAllocations.length === 1
+      && creditAllocations[0].playerId === payerId
+      && Number(creditAllocations[0].amount || 0) === creditTotal;
     if (alreadyAssignedToPayer) return;
 
     new Set([...currentByPlayer.keys(), payerId]).forEach((playerId) => {
-      const targetAmount = playerId === payerId ? advanceTotal : 0;
+      const targetAmount = playerId === payerId ? creditTotal : 0;
       adjustStateAdvanceBalance(targetState, playerId, targetAmount - Number(currentByPlayer.get(playerId) || 0));
     });
     transaction.allocations = [
       ...allocations.filter((allocation) => allocation.type !== "advance"),
-      { type: "advance", playerId: payerId, sessionId: "", activityId: "", amount: advanceTotal }
+      { type: "advance", playerId: payerId, sessionId: "", activityId: "", amount: creditTotal }
     ];
-    transaction.advanceAmount = advanceTotal;
+    transaction.advanceAmount = creditTotal;
   });
   return targetState;
 }
@@ -1145,10 +1146,10 @@ function applyGroupPayment({ paidById, playerIds, amountPaid, groupId = "" }) {
     allocations.push(...result.allocations);
   });
 
-  const advanceTotal = Math.max(0, Number((paidAmount - applied).toFixed(2)));
-  if (advanceTotal > 0) {
-    addPlayerAdvance(paidById, advanceTotal);
-    allocations.push({ type: "advance", playerId: paidById, amount: advanceTotal });
+  const creditTotal = Math.max(0, Number((paidAmount - applied).toFixed(2)));
+  if (creditTotal > 0) {
+    addPlayerAdvance(paidById, creditTotal);
+    allocations.push({ type: "advance", playerId: paidById, amount: creditTotal });
   }
   const transaction = {
     id: createId("payment-transaction"),
@@ -1159,12 +1160,12 @@ function applyGroupPayment({ paidById, playerIds, amountPaid, groupId = "" }) {
     playerIds: selectedIds,
     amountPaid: Number(paidAmount.toFixed(2)),
     appliedAmount: Number(applied.toFixed(2)),
-    advanceAmount: Number(advanceTotal.toFixed(2)),
+    advanceAmount: Number(creditTotal.toFixed(2)),
     allocations
   };
   state.paymentTransactions = state.paymentTransactions || [];
   state.paymentTransactions.push(transaction);
-  return { applied: Number(applied.toFixed(2)), remaining: Number(advanceTotal.toFixed(2)), allocations, transaction };
+  return { applied: Number(applied.toFixed(2)), remaining: Number(creditTotal.toFixed(2)), allocations, transaction };
 }
 
 function reversePaymentAllocation(allocation) {
