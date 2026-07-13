@@ -2502,6 +2502,184 @@ test("group payment overage credit belongs entirely to the payer", () => {
   assert.equal(run(context, 'playerAvailableAdvance("payer")'), 0);
 });
 
+test("payer Credit covers another payment-group member and rolls back cleanly", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Yogesh"), player("member", "Abhineya")],
+      advances: { payer: 122 },
+      paymentGroups: [
+        {
+          id: "yogesh-group",
+          name: "Yogesh",
+          payerId: "payer",
+          playerIds: ["payer", "member"],
+          guests: [],
+          active: true
+        }
+      ],
+      sessions: [
+        baseSession({
+          id: "payer-session",
+          totalPaid: 40,
+          perPersonAmount: 40,
+          responses: [
+            {
+              id: "payer-response",
+              playerId: "payer",
+              voteOrder: 1,
+              attendanceChoice: "in",
+              guestCount: 0,
+              racketNeeded: false,
+              rawOptions: ["I'm in"]
+            }
+          ]
+        }),
+        baseSession({
+          id: "member-session",
+          totalPaid: 40,
+          perPersonAmount: 40,
+          responses: [
+            {
+              id: "member-response",
+              playerId: "member",
+              voteOrder: 1,
+              attendanceChoice: "in",
+              guestCount: 0,
+              racketNeeded: false,
+              rawOptions: ["I'm in"]
+            }
+          ]
+        })
+      ]
+    })
+  );
+
+  assert.equal(run(context, 'playerRemainingCredit("payer")'), 82);
+  assert.equal(run(context, 'paymentGroupGrossBalance(getPaymentGroup("yogesh-group"))'), 40);
+  assert.equal(run(context, 'paymentGroupPayerCreditOffset(getPaymentGroup("yogesh-group"))'), 40);
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("yogesh-group"))'), 0);
+  assert.match(run(context, 'renderPaymentGroupCard(getPaymentGroup("yogesh-group"))'), /Covered by Credit/);
+  assert.match(run(context, 'renderPaymentGroupCard(getPaymentGroup("yogesh-group"))'), /Payer Credit: 82 AED; 40 AED covers this group/);
+
+  const result = jsonValue(context, 'applyGroupPayment({ paidById: "payer", playerIds: ["payer", "member"], amountPaid: 0, groupId: "yogesh-group" })');
+  assert.equal(result.applied, 40);
+  assert.equal(result.creditUsed, 40);
+  assert.equal(result.remaining, 0);
+  assert.deepEqual(result.allocations, [
+    { type: "session", playerId: "member", sessionId: "member-session", amount: 40 },
+    { type: "credit-use", playerId: "payer", amount: 40 }
+  ]);
+  assert.equal(run(context, 'state.advances.payer'), 82);
+  assert.equal(run(context, 'playerRemainingCredit("payer")'), 42);
+  assert.equal(run(context, 'state.sessions.find((session) => session.id === "member-session").payments.member.status'), "Paid");
+  assert.match(run(context, 'paymentGroupTransactionCopyLines("yogesh-group")[0]'), /Cash paid 0 AED, Applied 40 AED, Credit used 40 AED/);
+  assert.match(run(context, 'renderGroupPaymentHistoryRow(state.paymentTransactions.find((transaction) => transaction.type === "group-payment"))'), />40 AED Credit</);
+
+  assert.equal(run(context, 'deletePaymentTransaction(state.paymentTransactions.find((transaction) => transaction.type === "group-payment").id)'), true);
+  assert.equal(run(context, 'state.advances.payer'), 122);
+  assert.equal(run(context, 'playerRemainingCredit("payer")'), 82);
+  assert.equal(run(context, 'state.sessions.find((session) => session.id === "member-session").payments.member.status'), "Pending");
+});
+
+test("payer Credit is consumed before new cash for a payment group", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Yogesh"), player("member", "Abhineya")],
+      advances: { payer: 82 },
+      paymentGroups: [
+        {
+          id: "yogesh-group",
+          name: "Yogesh",
+          payerId: "payer",
+          playerIds: ["payer", "member"],
+          guests: [],
+          active: true
+        }
+      ],
+      sessions: [
+        baseSession({
+          id: "member-session",
+          totalPaid: 100,
+          perPersonAmount: 100,
+          responses: [
+            {
+              id: "member-response",
+              playerId: "member",
+              voteOrder: 1,
+              attendanceChoice: "in",
+              guestCount: 0,
+              racketNeeded: false,
+              rawOptions: ["I'm in"]
+            }
+          ]
+        })
+      ]
+    })
+  );
+
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("yogesh-group"))'), 18);
+  const result = jsonValue(context, 'applyGroupPayment({ paidById: "payer", playerIds: ["payer", "member"], amountPaid: 18, groupId: "yogesh-group" })');
+  assert.equal(result.applied, 100);
+  assert.equal(result.creditUsed, 82);
+  assert.equal(result.remaining, 0);
+  assert.equal(run(context, 'playerAdvance("payer")'), 0);
+  assert.equal(run(context, 'state.sessions[0].payments.member.status'), "Paid");
+});
+
+test("intentional Advance does not transfer across a payment group", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Yogesh"), player("member", "Abhineya")],
+      paymentGroups: [
+        {
+          id: "yogesh-group",
+          name: "Yogesh",
+          payerId: "payer",
+          playerIds: ["payer", "member"],
+          guests: [],
+          active: true
+        }
+      ],
+      sessions: [
+        baseSession({
+          id: "member-session",
+          totalPaid: 40,
+          perPersonAmount: 40,
+          responses: [
+            {
+              id: "member-response",
+              playerId: "member",
+              voteOrder: 1,
+              attendanceChoice: "in",
+              guestCount: 0,
+              racketNeeded: false,
+              rawOptions: ["I'm in"]
+            }
+          ]
+        })
+      ]
+    })
+  );
+  run(context, 'recordPlayerAdvance("payer", 82)');
+
+  assert.equal(run(context, 'playerRemainingCredit("payer")'), 0);
+  assert.equal(run(context, 'paymentGroupPayerCreditOffset(getPaymentGroup("yogesh-group"))'), 0);
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("yogesh-group"))'), 40);
+  assert.deepEqual(jsonValue(context, 'applyGroupPayment({ paidById: "payer", playerIds: ["payer", "member"], amountPaid: 0, groupId: "yogesh-group" })'), {
+    applied: 0,
+    creditUsed: 0,
+    remaining: 0,
+    allocations: []
+  });
+  assert.equal(run(context, 'state.sessions[0].payments.member.status'), "Pending");
+});
+
 test("group payment clears member dues before assigning remaining credit to payer", () => {
   const context = createAppContext();
   setAppState(

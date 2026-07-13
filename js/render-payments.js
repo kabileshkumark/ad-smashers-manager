@@ -278,10 +278,16 @@ function renderPaymentGroupsPanel(groups, isFiltered = false) {
 }
 
 function renderPaymentGroupCard(group) {
+  const grossBalance = paymentGroupGrossBalance(group);
+  const payerCredit = group.payerId ? playerRemainingCredit(group.payerId) : 0;
+  const creditOffset = paymentGroupPayerCreditOffset(group);
   const balance = paymentGroupBalance(group);
   const memberCount = paymentGroupMemberCount(group);
   const payerName = group.payerId ? getPlayerName(group.payerId) : "Not set";
   const historyItems = paymentGroupTransactions(group.id);
+  const balanceLabel = balance > 0 ? `${currency(balance)} due` : creditOffset > 0 ? "Covered by Credit" : "Clear";
+  const balanceClass = balance > 0 ? "gold" : creditOffset > 0 ? "teal" : "green";
+  const paymentActionLabel = grossBalance > 0 && balance <= 0 ? "Apply payer Credit" : "Apply group payment";
   return `
     <form class="row-card payment-group-card" data-form="payment-group-payment">
       <input type="hidden" name="groupId" value="${escapeAttr(group.id)}" />
@@ -289,17 +295,18 @@ function renderPaymentGroupCard(group) {
         <div class="payment-group-info">
           <div class="payment-group-title-line">
             <h3 class="row-title">${escapeHtml(group.name || "Payment Group")}</h3>
-            <span class="badge ${balance ? "gold" : "green"}">${balance ? `${currency(balance)} due` : "Clear"}</span>
+            <span class="badge ${balanceClass}">${balanceLabel}</span>
           </div>
           <p class="row-subtitle">Paid by ${escapeHtml(payerName)} - ${memberCount} members</p>
           <p class="row-subtitle payment-group-members">${escapeHtml(paymentGroupMemberNames(group))}</p>
+          ${creditOffset > 0 ? `<p class="row-subtitle">Payer Credit: ${currency(payerCredit)}; ${currency(creditOffset)} covers this group</p>` : ""}
         </div>
         <div class="payment-group-actions">
           <label class="field compact-field payment-group-amount-field">
             <span class="visually-hidden">Paid Amount</span>
-            <input class="input" type="number" name="amountPaid" min="0" step="0.01" inputmode="decimal" placeholder="0" />
+            <input class="input" type="number" name="amountPaid" min="0" step="0.01" inputmode="decimal" value="${balance > 0 ? escapeAttr(String(balance)) : ""}" placeholder="0" />
           </label>
-          <button class="btn primary icon-only" type="submit" aria-label="Apply payment for ${escapeAttr(group.name || "group")}" title="Apply group payment">${icon("wallet")}</button>
+          <button class="btn primary icon-only" type="submit" aria-label="${paymentActionLabel} for ${escapeAttr(group.name || "group")}" title="${paymentActionLabel}">${icon("wallet")}</button>
           <button class="btn icon-only" type="button" data-action="open-payment-group-copy" data-payment-group="${escapeAttr(group.id)}" aria-label="Copy payment details for ${escapeAttr(group.name || "group")}" title="Copy Payment Details">${icon("copy")}</button>
           <button class="btn icon-only" type="button" data-action="open-group-payment-history" data-payment-group="${escapeAttr(group.id)}" ${historyItems.length ? "" : "disabled"} aria-label="Payment history for ${escapeAttr(group.name || "group")}" title="Payment history">${icon("history")}</button>
           <button class="btn icon-only" type="button" data-action="edit-payment-group" data-payment-group="${escapeAttr(group.id)}" aria-label="Edit ${escapeAttr(group.name || "group")}" title="Edit">${icon("edit")}</button>
@@ -494,17 +501,21 @@ function renderGroupPaymentHistoryRow(transaction) {
   const coveredLabel = coveredNames.length > 3 ? `${coveredNames.slice(0, 3).join(", ")} + ${coveredNames.length - 3} more` : coveredNames.join(", ");
   const group = getPaymentGroup(transaction.groupId);
   const title = group?.name || "Group Payment";
-  const advanceText = Number(transaction.advanceAmount || 0) > 0 ? `, ${currency(transaction.advanceAmount)} advance` : "";
+  const creditUsed = paymentTransactionCreditUsed(transaction);
+  const creditUsedText = creditUsed > 0 ? `, ${currency(creditUsed)} Credit used` : "";
+  const creditAddedText = Number(transaction.advanceAmount || 0) > 0 ? `, ${currency(transaction.advanceAmount)} Credit added` : "";
+  const paymentBadge = Number(transaction.amountPaid || 0) > 0 ? `${currency(transaction.amountPaid)} cash` : `${currency(creditUsed)} Credit`;
+  const paymentBadgeClass = Number(transaction.amountPaid || 0) > 0 ? "green" : "teal";
   return `
     <article class="row-card payment-transaction-row">
       <div class="row-main">
         <div>
           <h3 class="row-title">${escapeHtml(title)}</h3>
           <p class="row-subtitle">${escapeHtml(formatDate(transaction.date))} - paid by ${escapeHtml(payerName)} for ${escapeHtml(coveredLabel || "players")}</p>
-          <p class="row-subtitle">${currency(Number(transaction.appliedAmount || 0))} applied${escapeHtml(advanceText)}</p>
+          <p class="row-subtitle">${currency(Number(transaction.appliedAmount || 0))} applied${escapeHtml(creditUsedText)}${escapeHtml(creditAddedText)}</p>
         </div>
         <div class="toolbar nowrap">
-          <span class="badge green">${currency(transaction.amountPaid)}</span>
+          <span class="badge ${paymentBadgeClass}">${paymentBadge}</span>
           <button class="btn icon-only danger" type="button" data-action="delete-payment-transaction" data-transaction="${escapeAttr(transaction.id)}" aria-label="Delete group payment" title="Delete">${icon("trash")}</button>
         </div>
       </div>
