@@ -3,6 +3,12 @@ let voteDragState = null;
 function setSessionField(sessionId, fieldName, value) {
   const session = getSession(sessionId);
   const numeric = ["plannedCourts", "bookedCourts", "playersPerCourt", "expectedPlayers", "totalPaid", "perPersonAmount", "shuttleCost", "waterCost"];
+  const financialFields = new Set(["date", "startTime", "endTime", "courtId", "bookedCourts", "totalPaid", "perPersonAmount", "shuttleCost", "waterCost"]);
+  if (financialFields.has(fieldName) && sessionHasActiveFinancialState(session)) {
+    showToast("Clear active cash, Advance, or Credit coverage before changing this session's financial basis.");
+    render();
+    return false;
+  }
   if (fieldName === "perPersonAmount") {
     updateSessionPerPersonAmount(session, value);
   } else {
@@ -16,6 +22,7 @@ function setSessionField(sessionId, fieldName, value) {
   syncSessionPayments(session);
   saveState();
   render();
+  return true;
 }
 
 function updateSessionModalCalculations(form) {
@@ -650,6 +657,11 @@ function handleClick(event) {
     return;
   }
   if (action === "add-manual-attendance-guest" && session) {
+    if (sessionPlayerHasActiveFinancialState(session, actionTarget.dataset.player)) {
+      showToast("Clear this player's active cash, Advance, or Credit coverage before changing guests.");
+      render();
+      return;
+    }
     if (addManualAttendanceGuest(session, actionTarget.dataset.player)) {
       saveState();
       showToast("Guest added.");
@@ -660,6 +672,12 @@ function handleClick(event) {
     return;
   }
   if (action === "add-response-guest" && session) {
+    const response = session.responses.find((item) => item.id === actionTarget.dataset.response);
+    if (response?.playerId && sessionPlayerHasActiveFinancialState(session, response.playerId)) {
+      showToast("Clear this player's active cash, Advance, or Credit coverage before changing guests.");
+      render();
+      return;
+    }
     if (addResponseGuest(session, actionTarget.dataset.response)) {
       saveState();
       showToast("Guest added.");
@@ -796,10 +814,11 @@ function handleClick(event) {
       openDeleteConfirmation({
         deleteType: "payment-transaction",
         transactionId: transaction.id,
-        title: isAdvancePayment ? "Delete Advance" : "Delete Group Payment",
+        confirmLabel: "Reverse",
+        title: isAdvancePayment ? "Reverse Advance" : "Reverse Payment",
         message: isAdvancePayment
-          ? `Delete this advance payment from ${getPlayerName(transaction.paidById)}? The advance balance will reduce.`
-          : `Delete this group payment by ${getPlayerName(transaction.paidById)}? The applied amount will become due again.`
+          ? `Reverse this Advance payment from ${getPlayerName(transaction.paidById)}? The Advance balance will reduce and the audit record will remain.`
+          : `Reverse this payment by ${getPlayerName(transaction.paidById)}? The applied amount will become due again and the audit record will remain.`
       });
     }
     return;
@@ -813,8 +832,9 @@ function handleClick(event) {
       activityId: actionTarget.dataset.activity || "",
       historyType: actionTarget.dataset.historyType || "",
       amount: actionTarget.dataset.amount || "",
-      title: "Delete Payment",
-      message: `Delete this payment entry for ${playerName}? The amount will become due again.`
+      confirmLabel: "Reverse",
+      title: "Reverse Payment",
+      message: `Reverse this payment entry for ${playerName}? The amount will become due again and an audit record will remain.`
     });
     return;
   }
@@ -1014,6 +1034,22 @@ async function handleSubmit(event) {
     };
     let session = existingSession;
     if (existingSession) {
+      const changedFinancialBasis = [
+        "date",
+        "startTime",
+        "endTime",
+        "courtId",
+        "bookedCourts",
+        "totalPaid",
+        "shuttleCost",
+        "waterCost",
+        "perPersonAmount"
+      ].some((fieldName) => String(existingSession[fieldName] ?? "") !== String(sessionData[fieldName] ?? ""));
+      if (changedFinancialBasis && sessionHasActiveFinancialState(existingSession)) {
+        showToast("Clear active cash, Advance, or Credit coverage before changing this session's financial basis.");
+        render();
+        return;
+      }
       Object.assign(existingSession, sessionData);
       updateSessionPerPersonAmount(existingSession, sessionData.perPersonAmount);
       applyAutomaticSessionStage(existingSession);
@@ -1149,8 +1185,8 @@ async function handleSubmit(event) {
     saveState();
     if (result.applied > 0 || result.remaining > 0) {
       const appliedText = result.applied > 0 ? `Applied ${currency(result.applied)}.` : "";
-      const advanceText = result.remaining > 0 ? ` ${currency(result.remaining)} added as advance.` : "";
-      showToast(`${appliedText}${advanceText}`.trim());
+      const creditText = result.remaining > 0 ? ` ${currency(result.remaining)} added as Credit.` : "";
+      showToast(`${appliedText}${creditText}`.trim());
     } else {
       showToast("No pending amount for this player.");
     }
@@ -1175,17 +1211,16 @@ async function handleSubmit(event) {
       render();
       return;
     }
-    if (!Number.isFinite(amountPaid) || amountPaid < 0) {
-      showToast("Enter a valid amount paid.");
+    if (!Number.isFinite(amountPaid) || amountPaid <= 0) {
+      showToast("Enter the amount paid.");
       render();
       return;
     }
     const result = applyGroupPayment({ paidById: group.payerId, playerIds, amountPaid, groupId: group.id });
     saveState();
     const appliedText = result.applied > 0 ? `Applied ${currency(result.applied)}.` : "";
-    const creditUsedText = result.creditUsed > 0 ? ` Used ${currency(result.creditUsed)} Credit for ${getPlayerName(group.payerId)}.` : "";
     const creditAddedText = result.remaining > 0 ? ` ${currency(result.remaining)} added as Credit for ${getPlayerName(group.payerId)}.` : "";
-    showToast(`${appliedText}${creditUsedText}${creditAddedText}`.trim() || "No payment or payer Credit was available to apply.");
+    showToast(`${appliedText}${creditAddedText}`.trim() || "No pending amount for this group.");
   }
 
   if (formType === "group-payment") {
@@ -1203,14 +1238,22 @@ async function handleSubmit(event) {
       render();
       return;
     }
-    if (!Number.isFinite(amountPaid) || amountPaid < 0) {
-      showToast("Enter a valid amount paid.");
+    if (!Number.isFinite(amountPaid) || amountPaid <= 0) {
+      showToast("Enter the amount paid.");
       render();
       return;
     }
     let groupId = groupPaymentDraft.groupId || "";
     const saveAsGroupName = String(groupPaymentDraft.saveAsGroupName || "").trim();
     if (!groupId && saveAsGroupName) {
+      const membershipConflicts = paymentGroupMembershipConflicts(playerIds, "", paidById);
+      if (membershipConflicts.length) {
+        const conflict = membershipConflicts[0];
+        const names = conflict.playerIds.map(getPlayerName).join(", ");
+        showToast(`${names} already ${conflict.playerIds.length === 1 ? "belongs" : "belong"} to ${conflict.group.name || "another payment group"}.`);
+        render();
+        return;
+      }
       const savedGroup = normalizePaymentGroup({
         id: createId("payment-group"),
         name: saveAsGroupName,
@@ -1227,9 +1270,8 @@ async function handleSubmit(event) {
     groupPaymentDraft = createGroupPaymentDraft();
     saveState();
     const appliedText = result.applied > 0 ? `Applied ${currency(result.applied)}.` : "";
-    const creditUsedText = result.creditUsed > 0 ? ` Used ${currency(result.creditUsed)} Credit for ${getPlayerName(paidById)}.` : "";
     const creditAddedText = result.remaining > 0 ? ` ${currency(result.remaining)} added as Credit for ${getPlayerName(paidById)}.` : "";
-    showToast(`${appliedText}${creditUsedText}${creditAddedText}`.trim() || "No payment or payer Credit was available to apply.");
+    showToast(`${appliedText}${creditAddedText}`.trim() || "No pending amount for the selected players.");
   }
 
   if (formType === "payment-group") {
@@ -1251,6 +1293,18 @@ async function handleSubmit(event) {
       return;
     }
     const existingGroup = paymentGroupDraft.id ? getPaymentGroup(paymentGroupDraft.id) : null;
+    const membershipConflicts = paymentGroupMembershipConflicts(
+      paymentGroupDraft.playerIds,
+      existingGroup?.id || "",
+      paymentGroupDraft.payerId
+    );
+    if (membershipConflicts.length) {
+      const conflict = membershipConflicts[0];
+      const names = conflict.playerIds.map(getPlayerName).join(", ");
+      showToast(`${names} already ${conflict.playerIds.length === 1 ? "belongs" : "belong"} to ${conflict.group.name || "another payment group"}.`);
+      render();
+      return;
+    }
     const groupData = normalizePaymentGroup({
       id: existingGroup?.id || createId("payment-group"),
       name: groupName,
@@ -1267,6 +1321,7 @@ async function handleSubmit(event) {
       state.paymentGroups.push(groupData);
       showToast("Payment group added.");
     }
+    syncSessionStages();
     paymentGroupDraft = createPaymentGroupDraft();
     modal = null;
     saveState();
@@ -1320,9 +1375,18 @@ async function handleSubmit(event) {
       paidById,
       playerIds,
       notes: activityDraft.notes || "",
-      shares: existingActivity?.shares || {}
+      shares: JSON.parse(JSON.stringify(existingActivity?.shares || {}))
     });
     if (existingActivity) {
+      const changedFinancialBasis = String(existingActivity.date || "") !== String(activity.date || "")
+        || Number(existingActivity.totalPaid || 0) !== Number(activity.totalPaid || 0)
+        || String(existingActivity.paidById || "") !== String(activity.paidById || "")
+        || uniqueIds(existingActivity.playerIds || []).join("|") !== uniqueIds(activity.playerIds || []).join("|");
+      if (changedFinancialBasis && activityHasActiveFinancialState(existingActivity)) {
+        showToast("Clear active cash, Advance, or Credit coverage before changing this activity split.");
+        render();
+        return;
+      }
       state.activities = state.activities.map((item) => (item.id === existingActivity.id ? activity : item));
     } else {
       state.activities.push(activity);
@@ -1372,6 +1436,11 @@ async function handleSubmit(event) {
     const role = form.dataset.role || "organizer";
     const config = playerRoleConfig(role);
     const playerId = data.playerId || "";
+    if (state.settings?.[config.field] !== playerId && state.sessions.some((session) => sessionHasActiveFinancialState(session))) {
+      showToast("Clear active cash, Advance, or Credit coverage before changing organizer roles.");
+      render();
+      return;
+    }
     state.settings[config.field] = playerId;
     if (playerId) {
       ["organizer", "coOrganizer"].forEach((otherRole) => {

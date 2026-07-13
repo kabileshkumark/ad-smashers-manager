@@ -19,7 +19,7 @@ function renderDashboard() {
         ${renderDashboardNextSession(data)}
         ${renderDashboardChartCard(
           "Collection Status",
-          "Collected, session dues, and activity dues from current records.",
+          "Cash, Advance, Credit, and outstanding dues from the canonical ledger.",
           renderDashboardCollectionChart(data),
           "dashboard-collection-status-card"
         )}
@@ -66,6 +66,10 @@ function dashboardDateTime(value) {
   return new Date(`${value || ""}T12:00:00`).getTime();
 }
 
+function dashboardMoney(value) {
+  return Number(Number(value || 0).toFixed(2));
+}
+
 function dashboardSessionsForRange(sessions, range) {
   const start = dashboardRangeStart(range);
   if (!start) return sessions;
@@ -100,8 +104,11 @@ function buildDashboardData() {
   const paymentTotals = dashboardPaymentTotals(pastRangeSessions);
   const activityTotals = dashboardActivityTotals(rangeActivities);
   const activePlayers = activePlayersAlphabetical();
-  const advanceTotal = activePlayers.reduce((total, player) => total + playerRemainingAdvance(player.id), 0);
-  const paidCollected = paymentTotals.paid + activityTotals.paid;
+  const advanceTotal = dashboardMoney(activePlayers.reduce((total, player) => total + playerRemainingAdvance(player.id), 0));
+  const creditTotal = dashboardMoney(activePlayers.reduce((total, player) => total + playerRemainingCredit(player.id), 0));
+  const cashCollected = dashboardMoney(paymentTotals.cashApplied + activityTotals.cashApplied);
+  const advanceApplied = dashboardMoney(paymentTotals.advanceApplied + activityTotals.advanceApplied);
+  const creditApplied = dashboardMoney(paymentTotals.creditApplied + activityTotals.creditApplied);
   const financeSnapshot = dashboardFinanceSnapshot(rangeAllSessions, rangeActivities);
   return {
     range,
@@ -121,7 +128,10 @@ function buildDashboardData() {
     paymentTotals,
     activityTotals,
     advanceTotal,
-    paidCollected,
+    creditTotal,
+    cashCollected,
+    advanceApplied,
+    creditApplied,
     financeSnapshot,
     courtSpend: dashboardCourtSpend(rangeAllSummaries),
     stageBreakdown: dashboardStageBreakdown(allSessions),
@@ -165,14 +175,19 @@ function dashboardPaymentTotals(sessions) {
   return sessions.reduce(
     (totals, session) => {
       Object.values(session.payments || {}).forEach((payment) => {
-        totals.due += paymentDueAmount(payment, session);
-        totals.paid += paymentCollectedAmount(session, payment);
-        totals.advance += paymentAdvanceApplied(session, payment) + Number(payment.advanceAmount || 0);
-        totals.outstanding += paymentOutstandingAfterAdvance(payment, session);
+        const coverage = paymentCoverageDetails(session, payment);
+        const due = paymentDueAmount(payment, session);
+        const cashApplied = Math.min(due, Number(payment.paidAmount || 0));
+        totals.due = dashboardMoney(totals.due + due);
+        totals.cashApplied = dashboardMoney(totals.cashApplied + cashApplied);
+        totals.advanceApplied = dashboardMoney(totals.advanceApplied + coverage.advanceApplied);
+        totals.creditApplied = dashboardMoney(totals.creditApplied + coverage.ownCreditApplied + coverage.groupCreditApplied);
+        totals.covered = dashboardMoney(totals.covered + Math.min(due, cashApplied + coverage.applied));
+        totals.outstanding = dashboardMoney(totals.outstanding + paymentOutstandingAfterCoverage(payment, session));
       });
       return totals;
     },
-    { due: 0, paid: 0, advance: 0, outstanding: 0 }
+    { due: 0, cashApplied: 0, advanceApplied: 0, creditApplied: 0, covered: 0, outstanding: 0 }
   );
 }
 
@@ -180,16 +195,22 @@ function dashboardActivityTotals(activities = state.activities || []) {
   return activities.reduce(
     (totals, activity) => {
       if (dashboardActivityIsShuttle(activity)) return totals;
-      totals.spent += Number(activity.totalPaid || 0);
+      totals.spent = dashboardMoney(totals.spent + Number(activity.totalPaid || 0));
       Object.values(activity.shares || {}).forEach((share) => {
         if (share.paidBySelf) return;
-        totals.due += Number(share.amount || 0);
-        totals.paid += shareCollectedAmount(activity, share);
-        totals.outstanding += shareOutstandingAfterAdvance(activity, share);
+        const due = Number(share.amount || 0);
+        const cashApplied = Math.min(due, Number(share.paidAmount || 0));
+        const coverage = shareCoverageDetails(activity, share);
+        totals.due = dashboardMoney(totals.due + due);
+        totals.cashApplied = dashboardMoney(totals.cashApplied + cashApplied);
+        totals.advanceApplied = dashboardMoney(totals.advanceApplied + coverage.advanceApplied);
+        totals.creditApplied = dashboardMoney(totals.creditApplied + coverage.ownCreditApplied + coverage.groupCreditApplied);
+        totals.covered = dashboardMoney(totals.covered + Math.min(due, cashApplied + coverage.applied));
+        totals.outstanding = dashboardMoney(totals.outstanding + shareOutstandingAfterCoverage(activity, share));
       });
       return totals;
     },
-    { spent: 0, due: 0, paid: 0, outstanding: 0 }
+    { spent: 0, due: 0, cashApplied: 0, advanceApplied: 0, creditApplied: 0, covered: 0, outstanding: 0 }
   );
 }
 
@@ -254,18 +275,24 @@ function dashboardPaymentCourtAmount(session, payment) {
 }
 
 function dashboardPaymentCollectionSplit(session, payment) {
-  const collected = paymentCollectedAmount(session, payment);
+  const due = paymentDueAmount(payment, session);
+  const cashApplied = Math.min(due, Number(payment.paidAmount || 0));
+  const covered = paymentCollectedAmount(session, payment);
   const shuttleDue = dashboardPaymentShuttleAmount(session, payment);
   const courtDue = dashboardPaymentCourtAmount(session, payment);
-  const shuttleCollected = Math.min(shuttleDue, collected);
-  const courtCollected = Math.min(courtDue, Math.max(0, Number((collected - shuttleCollected).toFixed(2))));
+  const shuttleCollected = Math.min(shuttleDue, cashApplied);
+  const courtCollected = Math.min(courtDue, Math.max(0, Number((cashApplied - shuttleCollected).toFixed(2))));
+  const shuttleCovered = Math.min(shuttleDue, covered);
+  const courtCovered = Math.min(courtDue, Math.max(0, Number((covered - shuttleCovered).toFixed(2))));
   return {
     courtDue,
     courtCollected,
-    courtOutstanding: Math.max(0, Number((courtDue - courtCollected).toFixed(2))),
+    courtCovered,
+    courtOutstanding: Math.max(0, Number((courtDue - courtCovered).toFixed(2))),
     shuttleDue,
     shuttleCollected,
-    shuttleOutstanding: Math.max(0, Number((shuttleDue - shuttleCollected).toFixed(2)))
+    shuttleCovered,
+    shuttleOutstanding: Math.max(0, Number((shuttleDue - shuttleCovered).toFixed(2)))
   };
 }
 
@@ -281,6 +308,7 @@ function dashboardFinanceSnapshot(sessions, activities = []) {
   let chargedPlayerTotal = 0;
   let shuttleCharged = 0;
   let shuttleCollected = 0;
+  let shuttleOutstanding = 0;
   const courtRows = sessions
     .map((session) => {
       const court = getCourt(session.courtId);
@@ -305,6 +333,7 @@ function dashboardFinanceSnapshot(sessions, activities = []) {
         due: 0,
         billed: 0,
         advance: 0,
+        credit: 0,
         sessions: 0
       });
     });
@@ -317,11 +346,13 @@ function dashboardFinanceSnapshot(sessions, activities = []) {
       if (!payment?.playerId || !playerMap.has(payment.playerId)) return;
       const row = playerMap.get(payment.playerId);
       const split = dashboardPaymentCollectionSplit(session, payment);
-      const advance = paymentAdvanceApplied(session, payment) + Number(payment.advanceAmount || 0);
+      const coverage = paymentCoverageDetails(session, payment);
       shuttleCollected += split.shuttleCollected;
+      shuttleOutstanding += split.shuttleOutstanding;
       row.billed += split.courtDue;
       row.collected += split.courtCollected;
-      row.advance += advance;
+      row.advance += coverage.advanceApplied;
+      row.credit += coverage.ownCreditApplied + coverage.groupCreditApplied;
       row.due += split.courtOutstanding;
       row.sessions += 1;
     });
@@ -332,21 +363,24 @@ function dashboardFinanceSnapshot(sessions, activities = []) {
       billed: Number(row.billed.toFixed(2)),
       collected: Number(row.collected.toFixed(2)),
       due: Number(row.due.toFixed(2)),
-      advance: Number(row.advance.toFixed(2))
+      advance: Number(row.advance.toFixed(2)),
+      credit: Number(row.credit.toFixed(2))
     }))
     .filter((row) => row.billed > 0 || row.collected > 0 || row.due > 0)
     .sort((a, b) => b.due - a.due || b.collected - a.collected || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-  const allCourtFee = sessions.reduce((total, session) => total + Number(session.totalPaid || 0), 0);
-  const billableCourtFee = billableSessions.reduce((total, session) => total + Number(session.totalPaid || 0), 0);
-  const billableWaterCost = billableSessions.reduce((total, session) => total + dashboardSessionWaterCost(session), 0);
-  const upcomingCourtFee = Math.max(0, allCourtFee - billableCourtFee);
-  const totalCollected = playerRows.reduce((total, row) => total + row.collected, 0);
-  const totalDue = Math.max(0, Number((chargedCourtTotal - totalCollected).toFixed(2)));
-  const shuttleSpent = dashboardShuttleActivitySpent(activities);
-  chargedCourtTotal = Number(chargedCourtTotal.toFixed(2));
-  chargedPlayerTotal = Number(chargedPlayerTotal.toFixed(2));
-  shuttleCharged = Number(shuttleCharged.toFixed(2));
-  const organizerChargeTotal = Number((chargedPlayerTotal - billableCourtFee - billableWaterCost - shuttleSpent).toFixed(2));
+  const allCourtFee = dashboardMoney(sessions.reduce((total, session) => total + Number(session.totalPaid || 0), 0));
+  const billableCourtFee = dashboardMoney(billableSessions.reduce((total, session) => total + Number(session.totalPaid || 0), 0));
+  const billableWaterCost = dashboardMoney(billableSessions.reduce((total, session) => total + dashboardSessionWaterCost(session), 0));
+  const upcomingCourtFee = dashboardMoney(Math.max(0, allCourtFee - billableCourtFee));
+  const totalCollected = dashboardMoney(playerRows.reduce((total, row) => total + row.collected, 0));
+  const totalDue = dashboardMoney(playerRows.reduce((total, row) => total + row.due, 0));
+  const shuttleSpent = dashboardMoney(dashboardShuttleActivitySpent(activities));
+  chargedCourtTotal = dashboardMoney(chargedCourtTotal);
+  chargedPlayerTotal = dashboardMoney(chargedPlayerTotal);
+  shuttleCharged = dashboardMoney(shuttleCharged);
+  shuttleCollected = dashboardMoney(shuttleCollected);
+  shuttleOutstanding = dashboardMoney(shuttleOutstanding);
+  const organizerChargeTotal = dashboardMoney(chargedPlayerTotal - billableCourtFee - billableWaterCost - shuttleSpent);
   return {
     courtRows,
     playerRows,
@@ -362,7 +396,7 @@ function dashboardFinanceSnapshot(sessions, activities = []) {
     organizerChargeTotal,
     shuttleCharged,
     shuttleCollected,
-    shuttleDue: Math.max(0, Number((shuttleCharged - shuttleCollected).toFixed(2))),
+    shuttleDue: shuttleOutstanding,
     shuttleSpent
   };
 }
@@ -527,9 +561,11 @@ function renderDashboardChartCard(title, subtitle, content, className = "") {
 
 function renderDashboardCollectionChart(data) {
   const segments = [
-    { label: "Collected", value: data.paidCollected, tone: "teal", text: currency(data.paidCollected) },
+    { label: "Cash Collected", value: data.cashCollected, tone: "teal", text: currency(data.cashCollected) },
+    { label: "Advance Applied", value: data.advanceApplied, tone: "blue", text: currency(data.advanceApplied) },
+    { label: "Credit Applied", value: data.creditApplied, tone: "green", text: currency(data.creditApplied) },
     { label: "Session Dues", value: data.paymentTotals.outstanding, tone: "gold", text: currency(data.paymentTotals.outstanding) },
-    { label: "Activity Dues", value: data.activityTotals.outstanding, tone: "green", text: currency(data.activityTotals.outstanding) }
+    { label: "Activity Dues", value: data.activityTotals.outstanding, tone: "red", text: currency(data.activityTotals.outstanding) }
   ];
   return `
     ${renderDashboardStackedBar(segments)}
@@ -660,12 +696,13 @@ function renderDashboardFinancePanel(data) {
       </div>
       <div class="finance-summary-grid">
         ${renderFinanceSummaryCard("Court Spent", currency(snapshot.billableCourtFee), "Past sessions only", "teal")}
-        ${renderFinanceSummaryCard("Court Collected", currency(snapshot.totalCollected), `${currency(snapshot.totalDue)} pending`, snapshot.totalDue ? "gold" : "green")}
+        ${renderFinanceSummaryCard("Court Cash Collected", currency(snapshot.totalCollected), `${currency(snapshot.totalDue)} pending`, snapshot.totalDue ? "gold" : "green")}
         ${renderFinanceSummaryCard("Shuttle Spent", currency(snapshot.shuttleSpent), "From shuttle purchases", "teal")}
-        ${renderFinanceSummaryCard("Shuttle Collected", currency(snapshot.shuttleCollected), `${currency(snapshot.shuttleDue)} pending`, snapshot.shuttleDue ? "gold" : "green")}
+        ${renderFinanceSummaryCard("Shuttle Cash Collected", currency(snapshot.shuttleCollected), `${currency(snapshot.shuttleDue)} pending`, snapshot.shuttleDue ? "gold" : "green")}
         ${renderFinanceSummaryCard("Activity Spent", currency(data.activityTotals.spent), "Excludes shuttle purchases", data.activityTotals.spent ? "teal" : "green")}
-        ${renderFinanceSummaryCard("Activity Collected", currency(data.activityTotals.paid), data.activityTotals.outstanding ? `${currency(data.activityTotals.outstanding)} pending` : "Clear", data.activityTotals.outstanding ? "gold" : "green")}
-        ${renderFinanceSummaryCard("Advance Credit", currency(data.advanceTotal), "Available credit", data.advanceTotal ? "teal" : "green")}
+        ${renderFinanceSummaryCard("Activity Cash Collected", currency(data.activityTotals.cashApplied), data.activityTotals.outstanding ? `${currency(data.activityTotals.outstanding)} pending` : "Clear", data.activityTotals.outstanding ? "gold" : "green")}
+        ${renderFinanceSummaryCard("Advance", currency(data.advanceTotal), "Available Advance", data.advanceTotal ? "teal" : "green")}
+        ${renderFinanceSummaryCard("Credit", currency(data.creditTotal), "Available Credit", data.creditTotal ? "teal" : "green")}
         ${renderFinanceSummaryCard("Organizer Net", financeCurrency(snapshot.organizerChargeTotal), "Charged - Spent", snapshot.organizerChargeTotal < 0 ? "gold" : "green")}
       </div>
       <div class="finance-detail-grid">

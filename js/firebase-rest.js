@@ -7,7 +7,7 @@ const FIRESTORE_LEGACY_DOCUMENT_URL = firestoreDocumentUrl(FIRESTORE_STATE_PATH)
 const FIRESTORE_WORKSPACE_DOCUMENT_NAME = firestoreDocumentName(FIRESTORE_WORKSPACE_PATH);
 const FIRESTORE_WORKSPACE_DOCUMENT_URL = firestoreDocumentUrl(FIRESTORE_WORKSPACE_PATH);
 const FIRESTORE_SCHEMA_VERSION = 1;
-const FIRESTORE_COMMIT_BATCH_SIZE = 450;
+const FIRESTORE_COMMIT_MAX_WRITES = 500;
 const FIRESTORE_AUDIT_LOG_COLLECTION = "auditLogs";
 const AUDIT_LOG_RETENTION_DAYS = 30;
 const AUDIT_LOG_RETENTION_MS = AUDIT_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000;
@@ -536,30 +536,27 @@ function staleStructuredDeleteWrites(previousIds, nextIds) {
 }
 
 async function commitFirestoreWrites(token, writes) {
-  let rootUpdateTime = "";
-  for (let index = 0; index < writes.length; index += FIRESTORE_COMMIT_BATCH_SIZE) {
-    const chunk = writes.slice(index, index + FIRESTORE_COMMIT_BATCH_SIZE);
-    const response = await fetch(FIRESTORE_COMMIT_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ writes: chunk })
-    });
-    if (!response.ok) {
-      const payload = await firebaseErrorPayload(response);
-      if (isCloudVersionConflict(response, payload)) {
-        throw cloudStateConflictError(firebaseErrorText(payload, response));
-      }
-      throw new Error(firebaseErrorText(payload, response));
-    }
-    const payload = await response.json();
-    if (index === 0) {
-      rootUpdateTime = payload.writeResults?.[0]?.updateTime || payload.commitTime || "";
-    }
+  if (writes.length > FIRESTORE_COMMIT_MAX_WRITES) {
+    throw new Error(`Cloud save requires ${writes.length} writes; the atomic limit is ${FIRESTORE_COMMIT_MAX_WRITES}. No data was written.`);
   }
-  return rootUpdateTime;
+  const response = await fetch(FIRESTORE_COMMIT_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ writes })
+  });
+  if (!response.ok) {
+    const payload = await firebaseErrorPayload(response);
+    if (isCloudVersionConflict(response, payload)) {
+      throw cloudStateConflictError(firebaseErrorText(payload, response));
+    }
+    throw new Error(firebaseErrorText(payload, response));
+  }
+  const payload = await response.json();
+  const rootIndex = writes.findIndex((write) => write.update?.name === FIRESTORE_WORKSPACE_DOCUMENT_NAME);
+  return payload.writeResults?.[rootIndex]?.updateTime || payload.commitTime || "";
 }
 
 function resetCloudStateVersion() {

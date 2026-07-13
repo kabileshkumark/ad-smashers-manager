@@ -110,7 +110,7 @@ function renderDeleteConfirmModal(config = {}) {
         </div>
         <div class="toolbar nowrap confirm-actions">
           <button class="btn" type="button" data-action="cancel-delete">Cancel</button>
-          <button class="btn danger" type="button" data-action="confirm-delete" data-delete-type="${escapeAttr(config.deleteType || "")}" data-session="${escapeAttr(config.sessionId || "")}" data-court="${escapeAttr(config.courtId || "")}" data-player="${escapeAttr(config.playerId || "")}" data-response="${escapeAttr(config.responseId || "")}" data-guest-key="${escapeAttr(config.guestKey || "")}" data-activity="${escapeAttr(config.activityId || "")}" data-payment-group="${escapeAttr(config.paymentGroupId || "")}" data-transaction="${escapeAttr(config.transactionId || "")}" data-history-type="${escapeAttr(config.historyType || "")}" data-amount="${escapeAttr(config.amount || "")}">Delete</button>
+          <button class="btn danger" type="button" data-action="confirm-delete" data-delete-type="${escapeAttr(config.deleteType || "")}" data-session="${escapeAttr(config.sessionId || "")}" data-court="${escapeAttr(config.courtId || "")}" data-player="${escapeAttr(config.playerId || "")}" data-response="${escapeAttr(config.responseId || "")}" data-guest-key="${escapeAttr(config.guestKey || "")}" data-activity="${escapeAttr(config.activityId || "")}" data-payment-group="${escapeAttr(config.paymentGroupId || "")}" data-transaction="${escapeAttr(config.transactionId || "")}" data-history-type="${escapeAttr(config.historyType || "")}" data-amount="${escapeAttr(config.amount || "")}">${escapeHtml(config.confirmLabel || "Delete")}</button>
         </div>
       </div>
     </div>
@@ -150,6 +150,7 @@ function renderPaymentHistoryModal(playerId = "") {
   const player = getPlayer(playerId);
   const playerName = player?.name || player?.displayName || "Player";
   const items = playerPaymentCorrectionItems(playerId);
+  const transactions = playerPaymentTransactions(playerId);
   return `
     <div class="modal-backdrop" data-modal-backdrop>
       <div class="modal-card payment-history-modal" role="dialog" aria-modal="true" aria-labelledby="payment-history-modal-title">
@@ -161,14 +162,62 @@ function renderPaymentHistoryModal(playerId = "") {
           <button class="btn icon-button" type="button" data-action="close-modal" aria-label="Close">X</button>
         </div>
         <div class="payment-history-list">
+          ${transactions.length ? `<h3 class="mini-title">Transactions</h3>${transactions.map((transaction) => renderPlayerPaymentTransactionItem(playerId, transaction)).join("")}` : ""}
           ${
             items.length
-              ? items.map((item) => renderPaymentHistoryItem(playerId, item)).join("")
-              : `<div class="empty">No recorded payments yet.</div>`
+              ? `${transactions.length ? `<h3 class="mini-title">Current Records</h3>` : ""}${items.map((item) => renderPaymentHistoryItem(playerId, item)).join("")}`
+              : transactions.length ? "" : `<div class="empty">No recorded payments yet.</div>`
           }
         </div>
       </div>
     </div>
+  `;
+}
+
+function renderPlayerPaymentTransactionItem(playerId, transaction) {
+  const isActive = paymentTransactionIsActive(transaction);
+  const isMigrated = transaction.status === "migrated";
+  const canReverse = isActive
+    && !isMigrated
+    && transaction.paidById === playerId
+    && ["advance-payment", "group-payment", "player-payment"].includes(transaction.type);
+  const group = getPaymentGroup(transaction.groupId);
+  const session = transaction.sessionId ? getSession(transaction.sessionId) : null;
+  const activity = transaction.activityId ? (state.activities || []).find((item) => item.id === transaction.activityId) : null;
+  const title = transaction.type === "advance-payment"
+    ? "Advance Payment"
+    : transaction.type === "player-payment"
+      ? "Player Payment"
+      : transaction.type === "group-payment"
+        ? group?.name || "Group Payment"
+        : transaction.type === "session-payment-adjustment"
+          ? `${session ? formatDate(session.date) : "Session"} Adjustment`
+          : `${activity?.name || "Activity"} Adjustment`;
+  let detail = `Cash ${currency(transaction.amountPaid)}, applied ${currency(transaction.appliedAmount)}`;
+  if (transaction.type === "advance-payment") {
+    detail = `Advance received ${currency(transaction.amountPaid)}`;
+  } else if (transaction.type === "session-payment-adjustment" || transaction.type === "activity-payment-adjustment") {
+    const previousTotal = Number(transaction.previousPayment?.paidAmount || 0) + Number(transaction.previousPayment?.advanceAmount || 0);
+    const nextTotal = Number(transaction.nextPayment?.paidAmount || 0) + Number(transaction.nextPayment?.advanceAmount || 0);
+    detail = `Recorded amount changed from ${currency(previousTotal)} to ${currency(nextTotal)}`;
+  } else if (Number(transaction.advanceAmount || 0) > 0) {
+    detail += `, Credit created ${currency(transaction.advanceAmount)}`;
+  }
+  if (!isActive) detail += ", transaction reversed";
+  if (isMigrated) detail += `, ${currency(transaction.migratedCreditAmount)} corrected to canonical Credit`;
+  return `
+    <article class="row-card payment-history-item payment-transaction-row">
+      <div class="row-main">
+        <div>
+          <h3 class="row-title">${escapeHtml(title)}</h3>
+          <p class="row-subtitle">${escapeHtml(formatDate(transaction.date))} - ${escapeHtml(detail)}</p>
+        </div>
+        <div class="toolbar nowrap">
+          <span class="badge ${isActive && !isMigrated ? "green" : "gold"}">${!isActive ? "Reversed" : isMigrated ? "Migrated" : currency(transaction.amountPaid)}</span>
+          ${canReverse ? `<button class="btn icon-only danger" type="button" data-action="delete-payment-transaction" data-transaction="${escapeAttr(transaction.id)}" aria-label="Reverse ${escapeAttr(title)}" title="Reverse">${icon("trash")}</button>` : ""}
+        </div>
+      </div>
+    </article>
   `;
 }
 
@@ -220,9 +269,13 @@ function renderPaymentGroupCopyModal(groupId = "") {
 function renderPaymentHistoryItem(playerId, item) {
   const amount = paymentHistoryAmount(item);
   const subtitle = item.advanceAmount
-    ? `${currency(item.paidAmount)} paid, ${currency(item.advanceAmount)} advance`
+    ? `${currency(item.paidAmount)} paid, ${currency(item.advanceAmount)} Credit created`
     : currency(amount);
-  const dateText = item.date ? formatDate(item.date) : "Manual advance";
+  const dateText = item.date ? formatDate(item.date) : item.type === "credit" ? "Current Credit" : "Manual payment";
+  const transactionBacked = item.type === "session"
+    ? paymentHasActiveTransactionAllocation(item.id, playerId)
+    : item.type === "activity" && activityShareHasActiveTransactionAllocation(item.id, playerId);
+  const canReverse = item.type !== "credit" && !transactionBacked;
   return `
     <article class="row-card payment-history-item">
       <div class="row-main">
@@ -230,7 +283,7 @@ function renderPaymentHistoryItem(playerId, item) {
           <h3 class="row-title">${escapeHtml(item.label)}</h3>
           <p class="row-subtitle">${escapeHtml(dateText)} - ${escapeHtml(subtitle)}</p>
         </div>
-        <button class="btn icon-only danger" type="button" data-action="delete-payment-history" data-player="${escapeAttr(playerId)}" data-history-type="${escapeAttr(item.type)}" data-session="${escapeAttr(item.type === "session" ? item.id : "")}" data-activity="${escapeAttr(item.type === "activity" ? item.id : "")}" data-amount="${escapeAttr(amount)}" aria-label="Delete ${escapeAttr(item.label)} payment" title="Delete">${icon("trash")}</button>
+        ${canReverse ? `<button class="btn icon-only danger" type="button" data-action="delete-payment-history" data-player="${escapeAttr(playerId)}" data-history-type="${escapeAttr(item.type)}" data-session="${escapeAttr(item.type === "session" ? item.id : "")}" data-activity="${escapeAttr(item.type === "activity" ? item.id : "")}" data-amount="${escapeAttr(amount)}" aria-label="Reverse ${escapeAttr(item.label)} payment" title="Reverse">${icon("trash")}</button>` : ""}
       </div>
     </article>
   `;
@@ -259,7 +312,7 @@ function renderPartialPaymentModal(sessionId = "", playerId = "") {
           <span>Amount Paid</span>
           <input class="input" type="number" name="amountPaid" min="0" step="0.01" value="${escapeAttr(currentAmount || "")}" autofocus />
         </label>
-        <p class="row-subtitle">If the amount is more than ${currency(amountDue)}, the extra will be added as advance on the Payments page.</p>
+        <p class="row-subtitle">If the amount is more than ${currency(amountDue)}, the extra will be added as Credit on the Payments page.</p>
         <div class="toolbar">
           <button class="btn primary" type="submit">Save Payment</button>
         </div>

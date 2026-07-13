@@ -425,16 +425,18 @@ function renderPaymentRow(session, payment) {
   const amountDue = Number(payment.amount || session.perPersonAmount || 0);
   const paidAmount = Number(payment.paidAmount || 0);
   const advanceAmount = Number(payment.advanceAmount || 0);
-  const advanceApplied = paymentAdvanceApplied(session, payment);
+  const coverage = paymentCoverageDetails(session, payment);
+  const coverageApplied = coverage.applied;
+  const coverageText = ledgerCoverageDescription(coverage);
   const guestCount = Number(payment.guestCount || 0);
   const guestText = guestCount > 0 ? ` (includes ${guestCount} guest${guestCount === 1 ? "" : "s"})` : "";
   const amountText = advanceAmount
-    ? `${currency(amountDue)} paid, ${currency(advanceAmount)} advance`
-    : advanceApplied > 0
+    ? `${currency(amountDue)} paid, ${currency(advanceAmount)} Credit`
+    : coverageApplied > 0
       ? `${[
           paidAmount > 0 ? `${currency(paidAmount)} paid` : "",
-          `${currency(advanceApplied)} advance`
-        ].filter(Boolean).join(" + ")} ${paidAmount + advanceApplied >= amountDue ? "covered" : `of ${currency(amountDue)}`}`
+          coverageText
+        ].filter(Boolean).join(" + ")} ${paidAmount + coverageApplied >= amountDue ? "covered" : `of ${currency(amountDue)}`}`
       : payment.status === "Partial"
         ? `${currency(paidAmount)} paid of ${currency(amountDue)}`
         : currency(amountDue);

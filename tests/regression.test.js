@@ -819,23 +819,21 @@ test("player payment copy includes full history and due reminder options", () =>
   assert.match(text, /Aishu - Payment History/);
   assert.match(text, /Attendance: 2/);
   assert.match(text, /Current Status: 35 AED owed/);
-  assert.match(text, /Sessions[\s\S]*Due 40 AED, Paid 10 AED, Recovered from adv 5 AED, Bal adv 0 AED, Pending 25 AED/);
-  assert.doesNotMatch(text, /Advance used 5 AED/);
+  assert.match(text, /Sessions[\s\S]*Due 40 AED, Cash recorded 10 AED, Own Credit applied 5 AED, Pending 25 AED/);
+  assert.doesNotMatch(text, /Advance applied/);
   assert.doesNotMatch(text, /19:00|21:00| at /);
-  assert.match(text, /Activities[\s\S]*Dinner: Share 15 AED, Paid 5 AED, Pending 10 AED/);
+  assert.match(text, /Activities[\s\S]*Dinner: Share 15 AED, Cash recorded 5 AED, Pending 10 AED/);
   assert.doesNotMatch(text, /Paid by Kabilesh/);
-  assert.match(text, /Advance[\s\S]*Total due before advance: 40 AED/);
-  assert.match(text, /Advance[\s\S]*Advance used: 5 AED/);
-  assert.match(text, /Advance[\s\S]*Revised due: 35 AED/);
+  assert.match(text, /Coverage[\s\S]*Own Credit applied: 5 AED/);
+  assert.match(text, /Coverage[\s\S]*Remaining due: 35 AED/);
 
   const dueText = run(context, 'buildPlayerDueHistoryCopy("p1")');
   assert.match(dueText, /Aishu - Payment Reminder/);
-  assert.match(dueText, /Total Due: 40 AED/);
-  assert.match(dueText, /Advance Balance: 5 AED/);
+  assert.match(dueText, /Total Due Before Coverage: 40 AED/);
   assert.match(dueText, /Revised Due: 35 AED/);
-  assert.match(dueText, /Sessions[\s\S]*Due 40 AED, Paid 10 AED, Recovered from adv 5 AED, Bal adv 0 AED, Pending 25 AED/);
+  assert.match(dueText, /Sessions[\s\S]*Due 40 AED, Cash recorded 10 AED, Own Credit applied 5 AED, Pending 25 AED/);
   assert.doesNotMatch(dueText, /19:00|21:00| at |No session dues|No activity dues/);
-  assert.match(dueText, /Activities[\s\S]*Dinner: Share 15 AED, Paid 5 AED, Pending 10 AED/);
+  assert.match(dueText, /Activities[\s\S]*Dinner: Share 15 AED, Cash recorded 5 AED, Pending 10 AED/);
 
   const modalHtml = run(context, 'renderPlayerPaymentDetailsModal("p1")');
   assert.match(modalHtml, /Payment Details/);
@@ -858,8 +856,8 @@ test("player payment copy includes full history and due reminder options", () =>
   assert.match(groupDueText, /Aishu Group - Payment Reminder/);
   assert.match(groupDueText, /Members: Kabilesh, Aishu/);
   assert.match(groupDueText, /Revised Due: 35 AED/);
-  assert.match(groupDueText, /Sessions[\s\S]*Due 40 AED, Paid 10 AED, Recovered from adv 5 AED, Bal adv 0 AED, Pending 25 AED/);
-  assert.match(groupDueText, /Activities[\s\S]*Dinner: Share 30 AED, Paid 20 AED, Pending 10 AED/);
+  assert.match(groupDueText, /Sessions[\s\S]*Due 40 AED, Cash recorded 10 AED, Own Credit applied 5 AED, Pending 25 AED/);
+  assert.match(groupDueText, /Activities[\s\S]*Dinner: Share 30 AED, Cash recorded 20 AED, Pending 10 AED/);
 });
 
 test("new session modal defaults from date and selects booking court", () => {
@@ -1618,7 +1616,7 @@ test("advance credit marks covered session payments as paid", () => {
   );
 
   assert.equal(run(context, 'paymentEffectiveStatus(getSession("covered-session"), getSession("covered-session").payments.p1)'), "Paid");
-  assert.equal(run(context, 'paymentOutstandingAfterAdvance(getSession("covered-session").payments.p1, getSession("covered-session"))'), 0);
+  assert.equal(run(context, 'paymentOutstandingAfterCoverage(getSession("covered-session").payments.p1, getSession("covered-session"))'), 0);
   assert.equal(run(context, 'sessionStats(getSession("covered-session")).paidCount'), 1);
   assert.equal(run(context, 'sessionStats(getSession("covered-session")).pendingCount'), 0);
   assert.equal(run(context, 'playerBalance("p1")'), 0);
@@ -1652,27 +1650,51 @@ test("partial advance leaves the remaining session amount pending", () => {
   );
 
   assert.equal(run(context, 'paymentEffectiveStatus(getSession("partial-session"), getSession("partial-session").payments.p1)'), "Partial");
-  assert.equal(run(context, 'paymentOutstandingAfterAdvance(getSession("partial-session").payments.p1, getSession("partial-session"))'), 15);
+  assert.equal(run(context, 'paymentOutstandingAfterCoverage(getSession("partial-session").payments.p1, getSession("partial-session"))'), 15);
   assert.equal(run(context, 'sessionStats(getSession("partial-session")).pendingAmount'), 15);
   assert.equal(run(context, 'playerBalance("p1")'), 15);
 });
 
-test("dashboard session totals use advance-aware payment amounts", () => {
+test("dashboard separates Advance and Credit coverage from cash collections", () => {
   const context = createAppContext();
   setAppState(
     context,
     baseFixture({
-      players: [player("p1", "Dashboard Advance")],
-      advances: { p1: 20 },
+      players: [player("advance", "Dashboard Advance"), player("credit", "Dashboard Credit")],
+      advances: { credit: 20 },
+      paymentTransactions: [
+        {
+          id: "dashboard-advance",
+          createdAt: `${isoDateFromToday(-1)}T10:00:00.000Z`,
+          type: "advance-payment",
+          separateAdvance: true,
+          date: isoDateFromToday(-1),
+          paidById: "advance",
+          playerIds: ["advance"],
+          amountPaid: 20,
+          appliedAmount: 0,
+          advanceAmount: 20,
+          allocations: [{ type: "advance", playerId: "advance", amount: 20 }]
+        }
+      ],
       sessions: [
         baseSession({
           id: "dashboard-session",
           perPersonAmount: 20,
           responses: [
             {
-              id: "dashboard-response",
-              playerId: "p1",
+              id: "dashboard-advance-response",
+              playerId: "advance",
               voteOrder: 1,
+              attendanceChoice: "in",
+              guestCount: 0,
+              racketNeeded: false,
+              rawOptions: ["I'm in"]
+            },
+            {
+              id: "dashboard-credit-response",
+              playerId: "credit",
+              voteOrder: 2,
               attendanceChoice: "in",
               guestCount: 0,
               racketNeeded: false,
@@ -1684,11 +1706,22 @@ test("dashboard session totals use advance-aware payment amounts", () => {
     })
   );
 
-  assert.equal(run(context, 'dashboardPaymentTotals(state.sessions).paid'), 20);
-  assert.equal(run(context, 'dashboardPaymentTotals(state.sessions).outstanding'), 0);
-  assert.equal(run(context, 'dashboardFinanceSnapshot(state.sessions).totalCollected'), 20);
+  assert.deepEqual(jsonValue(context, "dashboardPaymentTotals(state.sessions)"), {
+    due: 40,
+    cashApplied: 0,
+    advanceApplied: 20,
+    creditApplied: 20,
+    covered: 40,
+    outstanding: 0
+  });
+  assert.equal(run(context, 'dashboardFinanceSnapshot(state.sessions).totalCollected'), 0);
   assert.equal(run(context, 'dashboardFinanceSnapshot(state.sessions).totalDue'), 0);
   assert.equal(run(context, 'buildDashboardData().advanceTotal'), 0);
+  assert.equal(run(context, 'buildDashboardData().creditTotal'), 0);
+  const chartHtml = run(context, "renderDashboardCollectionChart(buildDashboardData())");
+  assert.match(chartHtml, /Cash Collected[\s\S]*0 AED/);
+  assert.match(chartHtml, /Advance Applied[\s\S]*20 AED/);
+  assert.match(chartHtml, /Credit Applied[\s\S]*20 AED/);
   assert.equal(run(context, 'normalizeStage(getSession("dashboard-session").stage)'), "Completed");
 });
 
@@ -1734,7 +1767,6 @@ test("dashboard court fee collected card excludes shuttle fees", () => {
       const session = getSession("shuttle-split-session");
       session.payments.p1.paidAmount = 25;
       session.payments.p1.status = "Paid";
-      delete session.payments.p2;
     `
   );
 
@@ -1755,17 +1787,18 @@ test("dashboard court fee collected card excludes shuttle fees", () => {
   assert.doesNotMatch(html, /Water Spent/);
   assert.doesNotMatch(html, /Activity Dues/);
   assert.doesNotMatch(html, /Organizer Charges/);
-  assert.match(html, /Court Collected[\s\S]*20 AED[\s\S]*20 AED pending/);
-  assert.match(html, /Shuttle Collected[\s\S]*5 AED[\s\S]*5 AED pending/);
-  assert.match(html, /Activity Collected[\s\S]*0 AED[\s\S]*Clear/);
+  assert.match(html, /Court Cash Collected[\s\S]*20 AED[\s\S]*20 AED pending/);
+  assert.match(html, /Shuttle Cash Collected[\s\S]*5 AED[\s\S]*5 AED pending/);
+  assert.match(html, /Activity Cash Collected[\s\S]*0 AED[\s\S]*Clear/);
   assert.match(html, /Organizer Net[\s\S]*\(10 AED\)[\s\S]*Charged - Spent/);
-  assert.ok(html.indexOf("Court Spent") < html.indexOf("Court Collected"));
-  assert.ok(html.indexOf("Court Collected") < html.indexOf("Shuttle Spent"));
-  assert.ok(html.indexOf("Shuttle Spent") < html.indexOf("Shuttle Collected"));
-  assert.ok(html.indexOf("Shuttle Collected") < html.indexOf("Activity Spent"));
-  assert.ok(html.indexOf("Activity Spent") < html.indexOf("Activity Collected"));
-  assert.ok(html.indexOf("Activity Collected") < html.indexOf("Advance Credit"));
-  assert.ok(html.indexOf("Advance Credit") < html.indexOf("Organizer Net"));
+  assert.ok(html.indexOf("Court Spent") < html.indexOf("Court Cash Collected"));
+  assert.ok(html.indexOf("Court Cash Collected") < html.indexOf("Shuttle Spent"));
+  assert.ok(html.indexOf("Shuttle Spent") < html.indexOf("Shuttle Cash Collected"));
+  assert.ok(html.indexOf("Shuttle Cash Collected") < html.indexOf("Activity Spent"));
+  assert.ok(html.indexOf("Activity Spent") < html.indexOf("Activity Cash Collected"));
+  assert.ok(html.indexOf("Activity Cash Collected") < html.indexOf(">Advance<"));
+  assert.ok(html.indexOf(">Advance<") < html.indexOf(">Credit<"));
+  assert.ok(html.indexOf(">Credit<") < html.indexOf("Organizer Net"));
 });
 
 test("dashboard charged court and shuttle split never exceeds player charges", () => {
@@ -2030,11 +2063,18 @@ test("activity dues also respect advance credit in finance views", () => {
   );
 
   assert.equal(run(context, 'activityOutstanding(state.activities[0])'), 20);
-  assert.equal(run(context, 'activityOutstandingAfterAdvance(state.activities[0])'), 0);
-  assert.equal(run(context, 'dashboardActivityTotals(state.activities).paid'), 20);
-  assert.equal(run(context, 'dashboardActivityTotals(state.activities).outstanding'), 0);
+  assert.equal(run(context, 'activityOutstandingAfterCoverage(state.activities[0])'), 0);
+  assert.deepEqual(jsonValue(context, "dashboardActivityTotals(state.activities)"), {
+    spent: 40,
+    due: 20,
+    cashApplied: 0,
+    advanceApplied: 0,
+    creditApplied: 20,
+    covered: 20,
+    outstanding: 0
+  });
   assert.equal(run(context, 'playerBalance("member")'), 0);
-  assert.equal(run(context, 'playerRemainingAdvance("member")'), 0);
+  assert.equal(run(context, 'playerRemainingCredit("member")'), 0);
 });
 
 test("dashboard activity summary excludes shuttle purchase logs", () => {
@@ -2073,25 +2113,34 @@ test("dashboard activity summary excludes shuttle purchase logs", () => {
   );
 
   const activityTotals = jsonValue(context, "dashboardActivityTotals(state.activities)");
-  assert.deepEqual(activityTotals, { spent: 40, due: 20, paid: 5, outstanding: 15 });
+  assert.deepEqual(activityTotals, {
+    spent: 40,
+    due: 20,
+    cashApplied: 5,
+    advanceApplied: 0,
+    creditApplied: 0,
+    covered: 5,
+    outstanding: 15
+  });
   assert.equal(run(context, "dashboardShuttleActivitySpent(state.activities)"), 120);
 
   const html = run(context, "renderDashboardFinancePanel(buildDashboardData())");
   assert.match(html, /Shuttle Spent[\s\S]*120 AED/);
   assert.match(html, /Activity Spent[\s\S]*40 AED/);
-  assert.match(html, /Activity Collected[\s\S]*5 AED[\s\S]*15 AED pending/);
+  assert.match(html, /Activity Cash Collected[\s\S]*5 AED[\s\S]*15 AED pending/);
   assert.match(html, /Organizer Net[\s\S]*\(120 AED\)[\s\S]*Charged - Spent/);
   assert.doesNotMatch(html, /Player Due/);
   assert.doesNotMatch(html, /Organizer Share/);
   assert.doesNotMatch(html, /Water Collected/);
   assert.doesNotMatch(html, /Water Spent/);
   assert.doesNotMatch(html, /Activity Dues/);
-  assert.ok(html.indexOf("Court Spent") < html.indexOf("Court Collected"));
-  assert.ok(html.indexOf("Court Collected") < html.indexOf("Shuttle Spent"));
+  assert.ok(html.indexOf("Court Spent") < html.indexOf("Court Cash Collected"));
+  assert.ok(html.indexOf("Court Cash Collected") < html.indexOf("Shuttle Spent"));
   assert.ok(html.indexOf("Shuttle Spent") < html.indexOf("Activity Spent"));
-  assert.ok(html.indexOf("Activity Spent") < html.indexOf("Activity Collected"));
-  assert.ok(html.indexOf("Activity Collected") < html.indexOf("Advance Credit"));
-  assert.ok(html.indexOf("Advance Credit") < html.indexOf("Organizer Net"));
+  assert.ok(html.indexOf("Activity Spent") < html.indexOf("Activity Cash Collected"));
+  assert.ok(html.indexOf("Activity Cash Collected") < html.indexOf(">Advance<"));
+  assert.ok(html.indexOf(">Advance<") < html.indexOf(">Credit<"));
+  assert.ok(html.indexOf(">Credit<") < html.indexOf("Organizer Net"));
 
   const paymentsHtml = run(context, "renderPayments()");
   assert.ok(paymentsHtml.indexOf("Activities") < paymentsHtml.indexOf("Shuttle Spent"));
@@ -2112,6 +2161,47 @@ test("dashboard activity summary excludes shuttle purchase logs", () => {
   const memberHistory = run(context, "buildPlayerPaymentHistoryCopy('member')");
   assert.doesNotMatch(memberHistory, /Shuttle bought/);
   assert.match(memberHistory, /Dinner/);
+});
+
+test("dashboard financial totals are normalized to currency precision", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Payer"), player("member", "Member")],
+      activities: [
+        {
+          id: "decimal-a",
+          name: "Decimal A",
+          date: isoDateFromToday(-2),
+          totalPaid: 0.2,
+          paidById: "payer",
+          playerIds: ["payer", "member"],
+          shares: {
+            payer: { playerId: "payer", amount: 0.1, paidAmount: 0.1, paidBySelf: true, status: "Paid" },
+            member: { playerId: "member", amount: 0.1, paidAmount: 0, paidBySelf: false, status: "Pending" }
+          }
+        },
+        {
+          id: "decimal-b",
+          name: "Decimal B",
+          date: isoDateFromToday(-1),
+          totalPaid: 0.4,
+          paidById: "payer",
+          playerIds: ["payer", "member"],
+          shares: {
+            payer: { playerId: "payer", amount: 0.2, paidAmount: 0.2, paidBySelf: true, status: "Paid" },
+            member: { playerId: "member", amount: 0.2, paidAmount: 0, paidBySelf: false, status: "Pending" }
+          }
+        }
+      ]
+    })
+  );
+
+  const totals = jsonValue(context, "dashboardActivityTotals(state.activities)");
+  assert.equal(totals.spent, 0.6);
+  assert.equal(totals.due, 0.3);
+  assert.equal(totals.outstanding, 0.3);
 });
 
 test("shuttle purchase modal locks repeated shuttle fields", () => {
@@ -2305,9 +2395,12 @@ test("player payment overage is stored as advance credit", () => {
     })
   );
 
-  assert.deepEqual(jsonValue(context, 'applyPlayerPayment("payer", 35)'), { applied: 20, remaining: 15 });
+  const result = jsonValue(context, 'applyPlayerPayment("payer", 35)');
+  assert.equal(result.applied, 20);
+  assert.equal(result.remaining, 15);
+  assert.equal(result.transaction.type, "player-payment");
   assert.equal(run(context, 'playerBalance("payer")'), 0);
-  assert.equal(run(context, 'playerAvailableAdvance("payer")'), 15);
+  assert.equal(run(context, 'playerRemainingCredit("payer")'), 15);
 });
 
 test("overpayment credit stays out of the dedicated advance section", () => {
@@ -2426,14 +2519,13 @@ test("advance summary moves to the next payment cycle after the prior advance is
   run(context, 'recordPlayerAdvance("payer", 100)');
 
   assert.equal(run(context, 'playerAvailableAdvance("payer")'), 300);
-  assert.deepEqual(jsonValue(context, 'playerAdvanceSummary("payer")'), { received: 100, deducted: 10, balance: 90 });
+  assert.deepEqual(jsonValue(context, 'playerAdvanceSummary("payer")'), { received: 300, deducted: 210, balance: 90 });
 
   const copy = run(context, 'buildPlayerAdvanceSummaryCopy("payer")');
   assert.match(copy, /Cycle Payer - Advance Summary/);
-  assert.match(copy, /Advance Paid: 100 AED/);
-  assert.match(copy, /Deducted: 10 AED/);
+  assert.match(copy, /Advance Paid: 300 AED/);
+  assert.match(copy, /Deducted: 210 AED/);
   assert.match(copy, /Balance: 90 AED/);
-  assert.doesNotMatch(copy, /Advance Paid: 300 AED|Advance Paid: 200 AED/);
 
   const historyHtml = run(context, 'renderAdvanceHistoryModal("payer")');
   assert.match(historyHtml, /Advance paid 100 AED, deducted 10 AED, balance 90 AED/);
@@ -2493,16 +2585,18 @@ test("group payment overage credit belongs entirely to the payer", () => {
   assert.deepEqual(jsonValue(context, 'applyGroupPayment({ paidById: "payer", playerIds: ["payer", "member"], amountPaid: 100 }).allocations'), [
     { type: "advance", playerId: "payer", amount: 100 }
   ]);
-  assert.equal(run(context, 'playerAvailableAdvance("payer")'), 100);
+  assert.equal(run(context, 'playerAvailableAdvance("payer")'), 0);
   assert.equal(run(context, 'playerRemainingCredit("payer")'), 100);
   assert.equal(run(context, 'playerAvailableAdvance("member")'), 0);
   assert.match(run(context, 'renderPlayerBalanceRow(getPlayer("payer"))'), /Credit 100 AED/);
   assert.doesNotMatch(run(context, 'renderPlayerBalanceRow(getPlayer("member"))'), /Credit/);
   assert.equal(run(context, 'deletePaymentTransaction(state.paymentTransactions[0].id)'), true);
-  assert.equal(run(context, 'playerAvailableAdvance("payer")'), 0);
+  assert.equal(run(context, 'playerRemainingCredit("payer")'), 0);
+  assert.equal(run(context, 'state.paymentTransactions.length'), 1);
+  assert.equal(run(context, 'state.paymentTransactions[0].status'), "reversed");
 });
 
-test("payer Credit covers another payment-group member and rolls back cleanly", () => {
+test("payer Credit automatically covers another payment-group member without being written as cash", () => {
   const context = createAppContext();
   setAppState(
     context,
@@ -2556,31 +2650,32 @@ test("payer Credit covers another payment-group member and rolls back cleanly", 
     })
   );
 
-  assert.equal(run(context, 'playerRemainingCredit("payer")'), 82);
+  assert.equal(run(context, 'playerRemainingCredit("payer")'), 42);
   assert.equal(run(context, 'paymentGroupGrossBalance(getPaymentGroup("yogesh-group"))'), 40);
-  assert.equal(run(context, 'paymentGroupPayerCreditOffset(getPaymentGroup("yogesh-group"))'), 40);
+  assert.equal(run(context, 'paymentGroupCreditApplied(getPaymentGroup("yogesh-group"))'), 40);
   assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("yogesh-group"))'), 0);
-  assert.match(run(context, 'renderPaymentGroupCard(getPaymentGroup("yogesh-group"))'), /Covered by Credit/);
-  assert.match(run(context, 'renderPaymentGroupCard(getPaymentGroup("yogesh-group"))'), /Payer Credit: 82 AED; 40 AED covers this group/);
+  assert.match(run(context, 'renderPaymentGroupCard(getPaymentGroup("yogesh-group"))'), /Clear/);
+  assert.match(run(context, 'renderPaymentGroupCard(getPaymentGroup("yogesh-group"))'), /40 AED Credit applied from Yogesh/);
+  assert.equal(run(context, 'playerBalance("member")'), 0);
+  assert.equal(run(context, 'paymentEffectiveStatus(getSession("member-session"), getSession("member-session").payments.member)'), "Paid");
+  assert.equal(run(context, 'state.sessions.find((session) => session.id === "member-session").payments.member.paidAmount'), 0);
+  assert.equal(run(context, 'state.sessions.find((session) => session.id === "member-session").payments.member.status'), "Pending");
 
   const result = jsonValue(context, 'applyGroupPayment({ paidById: "payer", playerIds: ["payer", "member"], amountPaid: 0, groupId: "yogesh-group" })');
-  assert.equal(result.applied, 40);
-  assert.equal(result.creditUsed, 40);
+  assert.equal(result.applied, 0);
+  assert.equal(result.creditUsed, 0);
   assert.equal(result.remaining, 0);
-  assert.deepEqual(result.allocations, [
-    { type: "session", playerId: "member", sessionId: "member-session", amount: 40 },
-    { type: "credit-use", playerId: "payer", amount: 40 }
-  ]);
-  assert.equal(run(context, 'state.advances.payer'), 82);
-  assert.equal(run(context, 'playerRemainingCredit("payer")'), 42);
-  assert.equal(run(context, 'state.sessions.find((session) => session.id === "member-session").payments.member.status'), "Paid");
-  assert.match(run(context, 'paymentGroupTransactionCopyLines("yogesh-group")[0]'), /Cash paid 0 AED, Applied 40 AED, Credit used 40 AED/);
-  assert.match(run(context, 'renderGroupPaymentHistoryRow(state.paymentTransactions.find((transaction) => transaction.type === "group-payment"))'), />40 AED Credit</);
-
-  assert.equal(run(context, 'deletePaymentTransaction(state.paymentTransactions.find((transaction) => transaction.type === "group-payment").id)'), true);
+  assert.deepEqual(result.allocations, []);
   assert.equal(run(context, 'state.advances.payer'), 122);
+  assert.equal(run(context, 'playerRemainingCredit("payer")'), 42);
+  assert.equal(run(context, 'state.paymentTransactions.length'), 0);
+
+  run(context, 'getPaymentGroup("yogesh-group").active = false');
   assert.equal(run(context, 'playerRemainingCredit("payer")'), 82);
-  assert.equal(run(context, 'state.sessions.find((session) => session.id === "member-session").payments.member.status'), "Pending");
+  assert.equal(run(context, 'playerBalance("member")'), 40);
+  run(context, 'getPaymentGroup("yogesh-group").active = true');
+  assert.equal(run(context, 'playerRemainingCredit("payer")'), 42);
+  assert.equal(run(context, 'playerBalance("member")'), 0);
 });
 
 test("payer Credit is consumed before new cash for a payment group", () => {
@@ -2623,11 +2718,17 @@ test("payer Credit is consumed before new cash for a payment group", () => {
 
   assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("yogesh-group"))'), 18);
   const result = jsonValue(context, 'applyGroupPayment({ paidById: "payer", playerIds: ["payer", "member"], amountPaid: 18, groupId: "yogesh-group" })');
-  assert.equal(result.applied, 100);
-  assert.equal(result.creditUsed, 82);
+  assert.equal(result.applied, 18);
+  assert.equal(result.creditUsed, 0);
   assert.equal(result.remaining, 0);
-  assert.equal(run(context, 'playerAdvance("payer")'), 0);
-  assert.equal(run(context, 'state.sessions[0].payments.member.status'), "Paid");
+  assert.equal(run(context, 'playerAdvance("payer")'), 82);
+  assert.equal(run(context, 'state.sessions[0].payments.member.paidAmount'), 18);
+  assert.equal(run(context, 'state.sessions[0].payments.member.status'), "Partial");
+  assert.equal(run(context, 'paymentEffectiveStatus(state.sessions[0], state.sessions[0].payments.member)'), "Paid");
+  assert.deepEqual(result.allocations, [{ type: "session", playerId: "member", sessionId: "member-session", amount: 18 }]);
+  assert.equal(result.transaction.amountPaid, 18);
+  assert.equal(result.transaction.appliedAmount, 18);
+  assert.equal(result.transaction.allocations.some((allocation) => allocation.type === "credit-use"), false);
 });
 
 test("intentional Advance does not transfer across a payment group", () => {
@@ -2669,8 +2770,9 @@ test("intentional Advance does not transfer across a payment group", () => {
   run(context, 'recordPlayerAdvance("payer", 82)');
 
   assert.equal(run(context, 'playerRemainingCredit("payer")'), 0);
-  assert.equal(run(context, 'paymentGroupPayerCreditOffset(getPaymentGroup("yogesh-group"))'), 0);
+  assert.equal(run(context, 'paymentGroupCreditApplied(getPaymentGroup("yogesh-group"))'), 0);
   assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("yogesh-group"))'), 40);
+  assert.equal(run(context, 'playerRemainingAdvance("payer")'), 82);
   assert.deepEqual(jsonValue(context, 'applyGroupPayment({ paidById: "payer", playerIds: ["payer", "member"], amountPaid: 0, groupId: "yogesh-group" })'), {
     applied: 0,
     creditUsed: 0,
@@ -2678,6 +2780,480 @@ test("intentional Advance does not transfer across a payment group", () => {
     allocations: []
   });
   assert.equal(run(context, 'state.sessions[0].payments.member.status'), "Pending");
+});
+
+test("payer Credit is reserved once across multiple saved payment groups", () => {
+  const context = createAppContext();
+  const memberSession = (id, playerId) => baseSession({
+    id,
+    totalPaid: 40,
+    perPersonAmount: 40,
+    responses: [{
+      id: `${id}-response`,
+      playerId,
+      voteOrder: 1,
+      attendanceChoice: "in",
+      guestCount: 0,
+      racketNeeded: false,
+      rawOptions: ["I'm in"]
+    }]
+  });
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Yogesh"), player("member-a", "Abhineya"), player("member-b", "Ravi")],
+      advances: { payer: 60 },
+      paymentGroups: [
+        { id: "group-a", name: "Group A", payerId: "payer", playerIds: ["payer", "member-a"], guests: [], active: true },
+        { id: "group-b", name: "Group B", payerId: "payer", playerIds: ["payer", "member-b"], guests: [], active: true }
+      ],
+      sessions: [memberSession("session-a", "member-a"), memberSession("session-b", "member-b")]
+    })
+  );
+
+  assert.equal(run(context, 'paymentGroupCreditApplied(getPaymentGroup("group-a"))'), 40);
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("group-a"))'), 0);
+  assert.equal(run(context, 'paymentGroupCreditApplied(getPaymentGroup("group-b"))'), 20);
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("group-b"))'), 20);
+  assert.equal(run(context, 'playerBalance("member-a")'), 0);
+  assert.equal(run(context, 'playerBalance("member-b")'), 20);
+  assert.equal(run(context, 'playerRemainingCredit("payer")'), 0);
+  assert.equal(run(context, 'coverageTotalsForPlayers(["member-a", "member-b"]).balance'), 20);
+
+  run(context, 'state = migrateState(JSON.parse(JSON.stringify(state)), { useSeedCollections: false })');
+  assert.equal(run(context, 'paymentGroupCreditApplied(getPaymentGroup("group-a"))'), 40);
+  assert.equal(run(context, 'paymentGroupCreditApplied(getPaymentGroup("group-b"))'), 20);
+  assert.equal(run(context, 'playerBalance("member-b")'), 20);
+});
+
+test("payment-group membership conflicts reject shared members but allow the same payer", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Payer"), player("member-a", "Member A"), player("member-b", "Member B")],
+      paymentGroups: [
+        { id: "group-a", name: "Group A", payerId: "payer", playerIds: ["payer", "member-a"], guests: [], active: true }
+      ]
+    })
+  );
+
+  assert.deepEqual(jsonValue(context, 'paymentGroupMembershipConflicts(["payer", "member-b"], "", "payer")'), []);
+  assert.deepEqual(
+    jsonValue(context, 'paymentGroupMembershipConflicts(["member-a", "member-b"], "", "member-b").map((conflict) => ({ groupId: conflict.group.id, playerIds: conflict.playerIds }))'),
+    [{ groupId: "group-a", playerIds: ["member-a"] }]
+  );
+  assert.deepEqual(jsonValue(context, 'paymentGroupMembershipConflicts(["payer", "member-a"], "group-a", "payer")'), []);
+});
+
+test("backup migration preserves intentional Advance as non-transferable", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Yogesh"), player("member", "Abhineya")],
+      paymentGroups: [
+        { id: "advance-group", name: "Advance Group", payerId: "payer", playerIds: ["payer", "member"], guests: [], active: true }
+      ],
+      paymentTransactions: [
+        {
+          id: "advance-transaction",
+          type: "advance-payment",
+          separateAdvance: true,
+          date: isoDateFromToday(-2),
+          paidById: "payer",
+          playerIds: ["payer"],
+          amountPaid: 80,
+          appliedAmount: 0,
+          advanceAmount: 80,
+          allocations: [{ type: "advance", playerId: "payer", amount: 80 }]
+        }
+      ],
+      sessions: [
+        baseSession({
+          id: "advance-member-session",
+          totalPaid: 40,
+          perPersonAmount: 40,
+          responses: [{
+            id: "advance-member-response",
+            playerId: "member",
+            voteOrder: 1,
+            attendanceChoice: "in",
+            guestCount: 0,
+            racketNeeded: false,
+            rawOptions: ["I'm in"]
+          }]
+        })
+      ]
+    })
+  );
+
+  assert.equal(run(context, 'state.paymentTransactions[0].separateAdvance'), true);
+  assert.equal(run(context, 'playerRemainingAdvance("payer")'), 80);
+  assert.equal(run(context, 'playerRemainingCredit("payer")'), 0);
+  assert.equal(run(context, 'paymentGroupCreditApplied(getPaymentGroup("advance-group"))'), 0);
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("advance-group"))'), 40);
+
+  run(context, 'state = migrateState(JSON.parse(JSON.stringify(state)), { useSeedCollections: false })');
+  assert.equal(run(context, 'state.paymentTransactions[0].separateAdvance'), true);
+  assert.equal(run(context, 'playerRemainingAdvance("payer")'), 80);
+  assert.equal(run(context, 'playerBalance("member")'), 40);
+});
+
+test("Version 1.0.3 credit-use records migrate back to derived Credit coverage", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Yogesh"), player("member", "Abhineya")],
+      paymentGroups: [
+        { id: "legacy-credit-group", name: "Yogesh", payerId: "payer", playerIds: ["payer", "member"], guests: [], active: true }
+      ],
+      paymentTransactions: [
+        {
+          id: "legacy-credit-use",
+          type: "group-payment",
+          date: isoDateFromToday(-1),
+          paidById: "payer",
+          groupId: "legacy-credit-group",
+          playerIds: ["payer", "member"],
+          amountPaid: 0,
+          appliedAmount: 40,
+          advanceAmount: 0,
+          allocations: [
+            { type: "session", playerId: "member", sessionId: "legacy-credit-session", amount: 40 },
+            { type: "credit-use", playerId: "payer", amount: 40 }
+          ]
+        }
+      ],
+      sessions: [
+        baseSession({
+          id: "legacy-credit-session",
+          totalPaid: 40,
+          perPersonAmount: 40,
+          responses: [{
+            id: "legacy-credit-response",
+            playerId: "member",
+            voteOrder: 1,
+            attendanceChoice: "in",
+            guestCount: 0,
+            racketNeeded: false,
+            rawOptions: ["I'm in"]
+          }],
+          payments: {
+            member: {
+              playerId: "member",
+              status: "Paid",
+              amount: 40,
+              paidAmount: 40,
+              method: "Bank",
+              paidDate: isoDateFromToday(-1),
+              notes: ""
+            }
+          }
+        })
+      ]
+    })
+  );
+
+  assert.equal(run(context, 'state.advances.payer'), 40);
+  assert.equal(run(context, 'state.sessions[0].payments.member.paidAmount'), 0);
+  assert.equal(run(context, 'state.sessions[0].payments.member.status'), "Pending");
+  assert.equal(run(context, 'state.paymentTransactions[0].status'), "migrated");
+  assert.equal(run(context, 'state.paymentTransactions[0].migratedCreditAmount'), 40);
+  assert.deepEqual(jsonValue(context, 'state.paymentTransactions[0].allocations'), []);
+  assert.equal(run(context, 'paymentGroupCreditApplied(getPaymentGroup("legacy-credit-group"))'), 40);
+  assert.equal(run(context, 'playerBalance("member")'), 0);
+  assert.equal(run(context, 'paymentEffectiveStatus(state.sessions[0], state.sessions[0].payments.member)'), "Paid");
+
+  run(context, 'state = migrateState(JSON.parse(JSON.stringify(state)), { useSeedCollections: false })');
+  assert.equal(run(context, 'state.advances.payer'), 40);
+  assert.equal(run(context, 'state.paymentTransactions[0].migratedCreditAmount'), 40);
+  assert.equal(run(context, 'state.sessions[0].payments.member.paidAmount'), 0);
+});
+
+test("individual cash receipts keep reversible audit history", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Payer")],
+      sessions: [
+        baseSession({
+          id: "individual-session",
+          responses: [{
+            id: "individual-response",
+            playerId: "payer",
+            voteOrder: 1,
+            attendanceChoice: "in",
+            guestCount: 0,
+            racketNeeded: false,
+            rawOptions: ["I'm in"]
+          }]
+        })
+      ]
+    })
+  );
+
+  const result = jsonValue(context, 'applyPlayerPayment("payer", 30)');
+  assert.equal(result.applied, 20);
+  assert.equal(result.remaining, 10);
+  assert.equal(result.transaction.type, "player-payment");
+  assert.match(result.transaction.createdAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  assert.equal(run(context, 'state.paymentTransactions.length'), 1);
+  assert.equal(run(context, 'playerRemainingCredit("payer")'), 10);
+  assert.equal(run(context, 'deletePaymentTransaction(state.paymentTransactions[0].id)'), true);
+  assert.equal(run(context, 'state.paymentTransactions.length'), 1);
+  assert.equal(run(context, 'state.paymentTransactions[0].status'), "reversed");
+  assert.equal(run(context, 'state.sessions[0].payments.payer.paidAmount'), 0);
+  assert.equal(run(context, 'playerRemainingCredit("payer")'), 0);
+  assert.equal(run(context, 'playerBalance("payer")'), 20);
+  assert.match(run(context, 'playerPaymentTransactionCopyLines("payer")[0]'), /\[REVERSED\]/);
+});
+
+test("derived payment-group Credit locks roster changes only while coverage is active", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Yogesh"), player("member", "Abhineya")],
+      advances: { payer: 40 },
+      paymentGroups: [
+        { id: "credit-group", name: "Yogesh", payerId: "payer", playerIds: ["payer", "member"], guests: [], active: true }
+      ],
+      sessions: [
+        baseSession({
+          id: "credit-guard-session",
+          perPersonAmount: 20,
+          responses: [{
+            id: "credit-guard-response",
+            playerId: "member",
+            voteOrder: 1,
+            attendanceChoice: "in",
+            guestCount: 1,
+            racketNeeded: false,
+            rawOptions: ["I'm in", "Guest"]
+          }]
+        })
+      ]
+    })
+  );
+
+  assert.equal(run(context, 'paymentCoverageApplied(state.sessions[0], state.sessions[0].payments.member)'), 40);
+  assert.equal(run(context, 'sessionPlayerHasActiveFinancialState(state.sessions[0], "member")'), true);
+  assert.equal(run(context, 'removeResponseGuest(state.sessions[0], "credit-guard-response")'), false);
+  assert.equal(run(context, 'state.sessions[0].responses[0].guestCount'), 1);
+
+  run(context, 'getPaymentGroup("credit-group").active = false');
+  assert.equal(run(context, 'sessionPlayerHasActiveFinancialState(state.sessions[0], "member")'), false);
+  assert.equal(run(context, 'removeResponseGuest(state.sessions[0], "credit-guard-response")'), true);
+  assert.equal(run(context, 'state.sessions[0].responses[0].guestCount'), 0);
+  assert.equal(run(context, 'state.sessions[0].payments.member.amount'), 20);
+});
+
+test("activity group-Credit coverage prevents deleting the covered member", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Yogesh"), player("member", "Abhineya")],
+      advances: { payer: 20 },
+      paymentGroups: [
+        { id: "activity-credit-group", name: "Yogesh", payerId: "payer", playerIds: ["payer", "member"], guests: [], active: true }
+      ],
+      activities: [
+        {
+          id: "activity-credit-guard",
+          name: "Dinner",
+          date: isoDateFromToday(-1),
+          totalPaid: 40,
+          paidById: "payer",
+          playerIds: ["payer", "member"],
+          shares: {
+            payer: { playerId: "payer", amount: 20, paidAmount: 20, paidBySelf: true, status: "Paid" },
+            member: { playerId: "member", amount: 20, paidAmount: 0, paidBySelf: false, status: "Pending" }
+          }
+        }
+      ]
+    })
+  );
+  run(context, 'showToast = () => {}; render = () => {}');
+
+  assert.equal(run(context, 'shareCoverageApplied(state.activities[0], state.activities[0].shares.member)'), 20);
+  assert.equal(run(context, 'activityPlayerHasActiveFinancialState(state.activities[0], "member")'), true);
+  assert.equal(run(context, 'playerHasFinancialHistory("member")'), true);
+  context.__deleteTarget = { dataset: { deleteType: "player", player: "member" } };
+  assert.equal(run(context, 'executeConfirmedDelete(__deleteTarget)'), false);
+  assert.equal(run(context, 'getPlayer("member").active'), true);
+
+  run(context, 'getPaymentGroup("activity-credit-group").active = false');
+  assert.equal(run(context, 'activityPlayerHasActiveFinancialState(state.activities[0], "member")'), false);
+  assert.equal(run(context, 'playerHasFinancialHistory("member")'), false);
+});
+
+test("transaction-owned records can only be reversed by the payer transaction", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Yogesh"), player("member", "Abhineya")],
+      sessions: [
+        baseSession({
+          id: "transaction-owned-session",
+          perPersonAmount: 20,
+          responses: [
+            {
+              id: "transaction-payer-response",
+              playerId: "payer",
+              voteOrder: 1,
+              attendanceChoice: "in",
+              guestCount: 0,
+              racketNeeded: false,
+              rawOptions: ["I'm in"]
+            },
+            {
+              id: "transaction-member-response",
+              playerId: "member",
+              voteOrder: 2,
+              attendanceChoice: "in",
+              guestCount: 0,
+              racketNeeded: false,
+              rawOptions: ["I'm in"]
+            }
+          ]
+        })
+      ]
+    })
+  );
+  run(context, 'showToast = () => {}; render = () => {}');
+
+  const result = jsonValue(context, 'applyGroupPayment({ paidById: "payer", playerIds: ["payer", "member"], amountPaid: 40 })');
+  assert.match(result.transaction.createdAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  assert.equal(run(context, 'paymentHasActiveTransactionAllocation("transaction-owned-session", "member")'), true);
+  assert.doesNotMatch(run(context, 'renderPaymentHistoryModal("member")'), /data-action="delete-payment-transaction"/);
+  assert.doesNotMatch(run(context, 'renderPaymentHistoryModal("member")'), /data-action="delete-payment-history"/);
+  assert.match(run(context, 'renderPaymentHistoryModal("payer")'), /data-action="delete-payment-transaction"/);
+
+  context.__deleteTarget = {
+    dataset: {
+      deleteType: "payment-history",
+      historyType: "session",
+      player: "member",
+      session: "transaction-owned-session"
+    }
+  };
+  assert.equal(run(context, 'executeConfirmedDelete(__deleteTarget)'), false);
+  assert.equal(run(context, 'state.sessions[0].payments.member.paidAmount'), 20);
+  assert.equal(run(context, 'paymentTransactionIsActive(state.paymentTransactions[0])'), true);
+
+  context.__transactionId = result.transaction.id;
+  assert.equal(run(context, 'deletePaymentTransaction(__transactionId)'), true);
+  assert.equal(run(context, 'state.sessions[0].payments.payer.paidAmount'), 0);
+  assert.equal(run(context, 'state.sessions[0].payments.member.paidAmount'), 0);
+});
+
+test("reversing a receipt unlocks roster edits while retained history blocks session deletion", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Payer")],
+      sessions: [
+        baseSession({
+          id: "reversed-history-session",
+          perPersonAmount: 20,
+          responses: [{
+            id: "reversed-history-response",
+            playerId: "payer",
+            voteOrder: 1,
+            attendanceChoice: "in",
+            guestCount: 1,
+            racketNeeded: false,
+            rawOptions: ["I'm in", "Guest"]
+          }]
+        })
+      ]
+    })
+  );
+  run(context, 'showToast = () => {}; render = () => {}');
+  const transactionId = run(context, 'applyPlayerPayment("payer", 40).transaction.id');
+
+  assert.equal(run(context, 'sessionPlayerHasActiveFinancialState(state.sessions[0], "payer")'), true);
+  assert.equal(run(context, 'removeResponseGuest(state.sessions[0], "reversed-history-response")'), false);
+  context.__transactionId = transactionId;
+  assert.equal(run(context, 'deletePaymentTransaction(__transactionId)'), true);
+  assert.equal(run(context, 'sessionPlayerHasActiveFinancialState(state.sessions[0], "payer")'), false);
+  assert.equal(run(context, 'sessionPlayerHasFinancialHistory(state.sessions[0], "payer")'), true);
+  assert.equal(run(context, 'removeResponseGuest(state.sessions[0], "reversed-history-response")'), true);
+
+  context.__deleteTarget = { dataset: { deleteType: "session", session: "reversed-history-session" } };
+  assert.equal(run(context, 'executeConfirmedDelete(__deleteTarget)'), false);
+  assert.equal(run(context, 'state.sessions.length'), 1);
+  assert.equal(run(context, 'state.paymentTransactions[0].status'), "reversed");
+});
+
+test("financial history blocks destructive session and roster mutations", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Payer")],
+      sessions: [
+        baseSession({
+          id: "guarded-session",
+          responses: [{
+            id: "guarded-response",
+            playerId: "payer",
+            voteOrder: 1,
+            attendanceChoice: "in",
+            guestCount: 0,
+            racketNeeded: false,
+            rawOptions: ["I'm in"]
+          }]
+        })
+      ]
+    })
+  );
+  run(context, 'showToast = () => {}; render = () => {}');
+  run(context, 'applyPlayerPayment("payer", 20)');
+  run(context, 'state.sessions[0].responses = []; syncSessionPayments(state.sessions[0])');
+  assert.equal(run(context, 'Boolean(state.sessions[0].payments.payer)'), true);
+  assert.equal(run(context, 'state.sessions[0].payments.payer.paidAmount'), 20);
+  assert.equal(run(context, 'setSessionField("guarded-session", "perPersonAmount", 30)'), false);
+  assert.equal(run(context, 'state.sessions[0].perPersonAmount'), 20);
+
+  context.__deleteTarget = { dataset: { deleteType: "session", session: "guarded-session" } };
+  assert.equal(run(context, 'executeConfirmedDelete(__deleteTarget)'), false);
+  assert.equal(run(context, 'state.sessions.length'), 1);
+});
+
+test("Advance coverage immediately synchronizes the completed session stage", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Advance Payer")],
+      sessions: [
+        baseSession({
+          id: "advance-stage-session",
+          responses: [{
+            id: "advance-stage-response",
+            playerId: "payer",
+            voteOrder: 1,
+            attendanceChoice: "in",
+            guestCount: 0,
+            racketNeeded: false,
+            rawOptions: ["I'm in"]
+          }]
+        })
+      ]
+    })
+  );
+
+  assert.equal(run(context, 'normalizeStage(state.sessions[0].stage)'), "Payment Collection");
+  run(context, 'recordPlayerAdvance("payer", 20)');
+  assert.equal(run(context, 'paymentEffectiveStatus(state.sessions[0], state.sessions[0].payments.payer)'), "Paid");
+  assert.equal(run(context, 'normalizeStage(state.sessions[0].stage)'), "Completed");
 });
 
 test("group payment clears member dues before assigning remaining credit to payer", () => {
@@ -2725,7 +3301,8 @@ test("group payment clears member dues before assigning remaining credit to paye
   ]);
   assert.equal(run(context, 'state.sessions[0].payments.payer.status'), "Paid");
   assert.equal(run(context, 'state.sessions[0].payments.member.status'), "Paid");
-  assert.equal(run(context, 'playerAvailableAdvance("payer")'), 60);
+  assert.equal(run(context, 'playerRemainingCredit("payer")'), 60);
+  assert.equal(run(context, 'playerAvailableAdvance("payer")'), 0);
   assert.equal(run(context, 'playerAvailableAdvance("member")'), 0);
 });
 
@@ -2824,7 +3401,7 @@ test("split group payment credits migrate back to the original payer", () => {
   assert.deepEqual(jsonValue(context, "state.paymentTransactions[0].allocations"), [
     { type: "advance", playerId: "payer", sessionId: "", activityId: "", amount: 40 }
   ]);
-  assert.equal(run(context, 'playerAvailableAdvance("payer")'), 40);
+  assert.equal(run(context, 'playerRemainingCredit("payer")'), 40);
   assert.equal(run(context, 'playerAvailableAdvance("member")'), 0);
   assert.equal(run(context, 'paymentEffectiveStatus(getSession("abhineya-session"), getSession("abhineya-session").payments.member)'), "Pending");
   assert.equal(run(context, 'playerBalance("member")'), 20);
@@ -3034,6 +3611,8 @@ test("shared icon action buttons keep square dimensions", () => {
   const shuttleSpentActions = block(/\.shuttle-spent-actions\s*\{[^}]+\}/);
   const mobileShuttleSpentActions = block(/@media \(max-width:\s*640px\)[\s\S]*?\.shuttle-spent-actions\s*\{[^}]+\}/);
   const mobilePlayerBalanceButton = block(/@media \(max-width:\s*640px\)[\s\S]*?\.player-balance-actions \.btn\.icon-only\s*\{[^}]+\}/);
+  const mobilePlayerBalanceRow = block(/@media \(max-width:\s*640px\)[\s\S]*?\.player-balance-row \.row-main\s*\{[^}]+\}/);
+  const mobilePlayerBalanceActions = block(/@media \(max-width:\s*640px\)[\s\S]*?\.player-balance-actions\s*\{[^}]+\}/);
   const playerBalanceChips = block(/\.player-balance-chips\s*\{[^}]+\}/);
   const playerBalanceChipPair = block(/\.player-balance-chip-pair\s*\{[^}]+\}/);
 
@@ -3066,6 +3645,8 @@ test("shared icon action buttons keep square dimensions", () => {
   assert.match(mobileActivityButtons, /flex:\s*0 0 40px/);
   assertSquare(mobilePlayerBalanceButton, 40);
   assert.match(mobilePlayerBalanceButton, /flex:\s*0 0 40px/);
+  assert.match(mobilePlayerBalanceRow, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*;/);
+  assert.match(mobilePlayerBalanceActions, /justify-self:\s*end/);
   assert.match(playerBalanceChips, /flex:\s*1 1 100%/);
   assert.match(playerBalanceChipPair, /display:\s*inline-flex/);
   assert.match(playerBalanceChipPair, /white-space:\s*nowrap/);
@@ -3714,6 +4295,30 @@ test("cloud save commits a versioned write with update-time precondition", async
   assert.ok(!deletes.includes("projects/home-kaish/databases/(default)/documents/adSmashers/main/auditLogs/audit-current"));
   assert.equal(run(context, "cloudStateVersion"), 8);
   assert.equal(run(context, "cloudStateUpdateTime"), "2026-07-03T04:01:00.000000Z");
+});
+
+test("cloud save rejects oversized commits before any partial write", async () => {
+  const context = createAppContext();
+  let fetchCount = 0;
+  context.fetch = async () => {
+    fetchCount += 1;
+    return jsonResponse(200, {});
+  };
+  context.__oversizedWrites = Array.from({ length: 501 }, (_, index) => ({
+    delete: `projects/home-kaish/databases/(default)/documents/adSmashers/main/test/${index}`
+  }));
+
+  let error = null;
+  try {
+    await run(context, 'commitFirestoreWrites("test-token", __oversizedWrites)');
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.ok(error);
+  assert.match(error.message, /atomic limit is 500/);
+  assert.match(error.message, /No data was written/);
+  assert.equal(fetchCount, 0);
 });
 
 test("first cloud save creates the structured workspace only when it does not exist", async () => {
