@@ -2224,7 +2224,7 @@ test("player balances show due players, then advance-credit players, then clear 
   ]);
 });
 
-test("player balance rows show covered due and advance chips", () => {
+test("player balance rows hide zero advance and label positive advance", () => {
   const context = createAppContext();
   setAppState(
     context,
@@ -2265,13 +2265,20 @@ test("player balance rows show covered due and advance chips", () => {
   assert.match(html, /player-balance-title-line/);
   assert.match(html, /Covered 13 AED/);
   assert.match(html, /Due 7 AED/);
-  assert.match(html, /Credit 0 AED/);
-  assert.match(html, /player-balance-chip-pair[\s\S]*Due 7 AED[\s\S]*Credit 0 AED/);
+  assert.doesNotMatch(html, /Credit/);
+  assert.doesNotMatch(html, /Advance 0 AED/);
+  assert.match(html, /player-balance-chip-pair[\s\S]*Due 7 AED/);
   assert.match(html, /data-action="open-player-payment-details"[^>]*data-player="p1"/);
   assert.match(html, /Copy Payment Details/);
   assert.doesNotMatch(html, /row-subtitle/);
   assert.doesNotMatch(html, /ledger-list/);
   assert.doesNotMatch(html, /session - 12 AED/);
+
+  run(context, "state.advances.p1 = 30");
+  assert.equal(run(context, 'playerRemainingAdvance("p1")'), 18);
+  const advanceHtml = run(context, 'renderPlayerBalanceRow(getPlayer("p1"))');
+  assert.match(advanceHtml, /Advance 18 AED/);
+  assert.doesNotMatch(advanceHtml, /Credit/);
 });
 
 test("player payment overage is stored as advance credit", () => {
@@ -2303,7 +2310,7 @@ test("player payment overage is stored as advance credit", () => {
   assert.equal(run(context, 'playerAvailableAdvance("payer")'), 15);
 });
 
-test("overpayment credit stays out of the dedicated advance section", () => {
+test("overpayment advance stays out of the dedicated advance section", () => {
   const context = createAppContext();
   setAppState(context, baseFixture({ players: [player("payer", "Credit Player")], advances: { payer: 50 } }));
 
@@ -2314,7 +2321,7 @@ test("overpayment credit stays out of the dedicated advance section", () => {
   const advanceSection = html.slice(html.indexOf("<h2>Advance</h2>"), html.indexOf("<h2>Player Balances</h2>"));
   const advanceList = advanceSection.slice(advanceSection.indexOf('<div class="advance-list">'));
   assert.doesNotMatch(advanceList, /Credit Player/);
-  assert.match(html, /Credit Player[\s\S]*Credit 50 AED/);
+  assert.match(html, /Credit Player[\s\S]*Advance 50 AED/);
 });
 
 test("payments page records player advances and copies deduction summary", () => {
@@ -2477,19 +2484,20 @@ test("legacy advance section entries are not double counted as credit", () => {
   assert.equal(run(context, 'playerAdvance("payer")'), 0);
 });
 
-test("group payment overage is split as advance across covered players", () => {
+test("group payment overage belongs entirely to the payer", () => {
   const context = createAppContext();
   setAppState(context, baseFixture({ players: [player("payer", "Yogesh"), player("member", "Abhineya")] }));
 
   assert.deepEqual(jsonValue(context, 'applyGroupPayment({ paidById: "payer", playerIds: ["payer", "member"], amountPaid: 100 }).allocations'), [
-    { type: "advance", playerId: "payer", amount: 50 },
-    { type: "advance", playerId: "member", amount: 50 }
+    { type: "advance", playerId: "payer", amount: 100 }
   ]);
-  assert.equal(run(context, 'playerAvailableAdvance("payer")'), 50);
-  assert.equal(run(context, 'playerAvailableAdvance("member")'), 50);
+  assert.equal(run(context, 'playerAvailableAdvance("payer")'), 100);
+  assert.equal(run(context, 'playerAvailableAdvance("member")'), 0);
+  assert.equal(run(context, 'deletePaymentTransaction(state.paymentTransactions[0].id)'), true);
+  assert.equal(run(context, 'playerAvailableAdvance("payer")'), 0);
 });
 
-test("group payment clears member dues before splitting remaining advance", () => {
+test("group payment clears member dues before assigning remaining advance to payer", () => {
   const context = createAppContext();
   setAppState(
     context,
@@ -2530,13 +2538,12 @@ test("group payment clears member dues before splitting remaining advance", () =
   assert.deepEqual(result.allocations, [
     { type: "session", playerId: "payer", sessionId: "group-session", amount: 20 },
     { type: "session", playerId: "member", sessionId: "group-session", amount: 20 },
-    { type: "advance", playerId: "payer", amount: 30 },
-    { type: "advance", playerId: "member", amount: 30 }
+    { type: "advance", playerId: "payer", amount: 60 }
   ]);
   assert.equal(run(context, 'state.sessions[0].payments.payer.status'), "Paid");
   assert.equal(run(context, 'state.sessions[0].payments.member.status'), "Paid");
-  assert.equal(run(context, 'playerAvailableAdvance("payer")'), 30);
-  assert.equal(run(context, 'playerAvailableAdvance("member")'), 30);
+  assert.equal(run(context, 'playerAvailableAdvance("payer")'), 60);
+  assert.equal(run(context, 'playerAvailableAdvance("member")'), 0);
 });
 
 test("partial group payment is split across covered players", () => {
@@ -2587,13 +2594,13 @@ test("partial group payment is split across covered players", () => {
   assert.equal(run(context, 'state.sessions[0].payments.member.paidAmount'), 8);
 });
 
-test("legacy group payment advance is rebalanced across covered players on load", () => {
+test("split group payment advances migrate back to the original payer", () => {
   const context = createAppContext();
   setAppState(
     context,
     baseFixture({
       players: [player("payer", "Yogesh"), player("member", "Abhineya")],
-      advances: { payer: 40 },
+      advances: { payer: 20, member: 20 },
       paymentTransactions: [
         {
           id: "legacy-group-payment",
@@ -2605,7 +2612,10 @@ test("legacy group payment advance is rebalanced across covered players on load"
           amountPaid: 40,
           appliedAmount: 0,
           advanceAmount: 40,
-          allocations: [{ type: "advance", playerId: "payer", amount: 40 }]
+          allocations: [
+            { type: "advance", playerId: "payer", amount: 20 },
+            { type: "advance", playerId: "member", amount: 20 }
+          ]
         }
       ],
       sessions: [
@@ -2629,12 +2639,50 @@ test("legacy group payment advance is rebalanced across covered players on load"
   );
 
   assert.deepEqual(jsonValue(context, "state.paymentTransactions[0].allocations"), [
-    { type: "advance", playerId: "payer", amount: 20 },
-    { type: "advance", playerId: "member", amount: 20 }
+    { type: "advance", playerId: "payer", sessionId: "", activityId: "", amount: 40 }
   ]);
-  assert.equal(run(context, 'playerAvailableAdvance("payer")'), 20);
-  assert.equal(run(context, 'paymentEffectiveStatus(getSession("abhineya-session"), getSession("abhineya-session").payments.member)'), "Paid");
-  assert.equal(run(context, 'playerBalance("member")'), 0);
+  assert.equal(run(context, 'playerAvailableAdvance("payer")'), 40);
+  assert.equal(run(context, 'playerAvailableAdvance("member")'), 0);
+  assert.equal(run(context, 'paymentEffectiveStatus(getSession("abhineya-session"), getSession("abhineya-session").payments.member)'), "Pending");
+  assert.equal(run(context, 'playerBalance("member")'), 20);
+
+  run(context, "state = migrateState(state, { useSeedCollections: false })");
+  assert.deepEqual(jsonValue(context, "state.advances"), { payer: 40 });
+  assert.deepEqual(jsonValue(context, "state.paymentTransactions[0].allocations"), [
+    { type: "advance", playerId: "payer", sessionId: "", activityId: "", amount: 40 }
+  ]);
+});
+
+test("group advance migration preserves unrelated player advances", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Yogesh"), player("member", "Abhineya")],
+      advances: { payer: 30, member: 25 },
+      paymentTransactions: [
+        {
+          id: "split-group-payment",
+          type: "group-payment",
+          date: "2026-07-12",
+          paidById: "payer",
+          playerIds: ["payer", "member"],
+          amountPaid: 40,
+          appliedAmount: 0,
+          advanceAmount: 40,
+          allocations: [
+            { type: "advance", playerId: "payer", amount: 20 },
+            { type: "advance", playerId: "member", amount: 20 }
+          ]
+        }
+      ]
+    })
+  );
+
+  assert.deepEqual(jsonValue(context, "state.advances"), { payer: 50, member: 5 });
+  assert.deepEqual(jsonValue(context, "state.paymentTransactions[0].allocations"), [
+    { type: "advance", playerId: "payer", sessionId: "", activityId: "", amount: 40 }
+  ]);
 });
 
 test("saved payment groups can include named guests", () => {
