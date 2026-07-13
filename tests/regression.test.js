@@ -2224,7 +2224,7 @@ test("player balances show due players, then advance-credit players, then clear 
   ]);
 });
 
-test("player balance rows hide zero advance and label positive advance", () => {
+test("player balance rows hide zero credit and label positive credit", () => {
   const context = createAppContext();
   setAppState(
     context,
@@ -2266,7 +2266,7 @@ test("player balance rows hide zero advance and label positive advance", () => {
   assert.match(html, /Covered 13 AED/);
   assert.match(html, /Due 7 AED/);
   assert.doesNotMatch(html, /Credit/);
-  assert.doesNotMatch(html, /Advance 0 AED/);
+  assert.doesNotMatch(html, /Credit 0 AED/);
   assert.match(html, /player-balance-chip-pair[\s\S]*Due 7 AED/);
   assert.match(html, /data-action="open-player-payment-details"[^>]*data-player="p1"/);
   assert.match(html, /Copy Payment Details/);
@@ -2275,10 +2275,10 @@ test("player balance rows hide zero advance and label positive advance", () => {
   assert.doesNotMatch(html, /session - 12 AED/);
 
   run(context, "state.advances.p1 = 30");
-  assert.equal(run(context, 'playerRemainingAdvance("p1")'), 18);
-  const advanceHtml = run(context, 'renderPlayerBalanceRow(getPlayer("p1"))');
-  assert.match(advanceHtml, /Advance 18 AED/);
-  assert.doesNotMatch(advanceHtml, /Credit/);
+  assert.equal(run(context, 'playerRemainingCredit("p1")'), 18);
+  const creditHtml = run(context, 'renderPlayerBalanceRow(getPlayer("p1"))');
+  assert.match(creditHtml, /Credit 18 AED/);
+  assert.doesNotMatch(creditHtml, /Advance/);
 });
 
 test("player payment overage is stored as advance credit", () => {
@@ -2310,7 +2310,7 @@ test("player payment overage is stored as advance credit", () => {
   assert.equal(run(context, 'playerAvailableAdvance("payer")'), 15);
 });
 
-test("overpayment advance stays out of the dedicated advance section", () => {
+test("overpayment credit stays out of the dedicated advance section", () => {
   const context = createAppContext();
   setAppState(context, baseFixture({ players: [player("payer", "Credit Player")], advances: { payer: 50 } }));
 
@@ -2321,7 +2321,7 @@ test("overpayment advance stays out of the dedicated advance section", () => {
   const advanceSection = html.slice(html.indexOf("<h2>Advance</h2>"), html.indexOf("<h2>Player Balances</h2>"));
   const advanceList = advanceSection.slice(advanceSection.indexOf('<div class="advance-list">'));
   assert.doesNotMatch(advanceList, /Credit Player/);
-  assert.match(html, /Credit Player[\s\S]*Advance 50 AED/);
+  assert.match(html, /Credit Player[\s\S]*Credit 50 AED/);
 });
 
 test("payments page records player advances and copies deduction summary", () => {
@@ -2364,6 +2364,8 @@ test("payments page records player advances and copies deduction summary", () =>
   assert.match(html, /Advance Payer[\s\S]*Advance Paid[\s\S]*200 AED[\s\S]*Deducted[\s\S]*20 AED[\s\S]*Balance[\s\S]*180 AED/);
   assert.match(html, /data-action="open-player-advance-details"[^>]*data-player="payer"/);
   assert.match(html, /data-action="open-player-advance-history"[^>]*data-player="payer"/);
+  assert.equal(run(context, 'playerRemainingCredit("payer")'), 0);
+  assert.doesNotMatch(run(context, 'renderPlayerBalanceRow(getPlayer("payer"))'), /Credit \d+(?:\.\d+)? AED/);
 
   const copy = run(context, 'buildPlayerAdvanceSummaryCopy("payer")');
   assert.match(copy, /Advance Payer - Advance Summary/);
@@ -2484,7 +2486,7 @@ test("legacy advance section entries are not double counted as credit", () => {
   assert.equal(run(context, 'playerAdvance("payer")'), 0);
 });
 
-test("group payment overage belongs entirely to the payer", () => {
+test("group payment overage credit belongs entirely to the payer", () => {
   const context = createAppContext();
   setAppState(context, baseFixture({ players: [player("payer", "Yogesh"), player("member", "Abhineya")] }));
 
@@ -2492,12 +2494,15 @@ test("group payment overage belongs entirely to the payer", () => {
     { type: "advance", playerId: "payer", amount: 100 }
   ]);
   assert.equal(run(context, 'playerAvailableAdvance("payer")'), 100);
+  assert.equal(run(context, 'playerRemainingCredit("payer")'), 100);
   assert.equal(run(context, 'playerAvailableAdvance("member")'), 0);
+  assert.match(run(context, 'renderPlayerBalanceRow(getPlayer("payer"))'), /Credit 100 AED/);
+  assert.doesNotMatch(run(context, 'renderPlayerBalanceRow(getPlayer("member"))'), /Credit/);
   assert.equal(run(context, 'deletePaymentTransaction(state.paymentTransactions[0].id)'), true);
   assert.equal(run(context, 'playerAvailableAdvance("payer")'), 0);
 });
 
-test("group payment clears member dues before assigning remaining advance to payer", () => {
+test("group payment clears member dues before assigning remaining credit to payer", () => {
   const context = createAppContext();
   setAppState(
     context,
@@ -2594,7 +2599,7 @@ test("partial group payment is split across covered players", () => {
   assert.equal(run(context, 'state.sessions[0].payments.member.paidAmount'), 8);
 });
 
-test("split group payment advances migrate back to the original payer", () => {
+test("split group payment credits migrate back to the original payer", () => {
   const context = createAppContext();
   setAppState(
     context,
@@ -2653,7 +2658,7 @@ test("split group payment advances migrate back to the original payer", () => {
   ]);
 });
 
-test("group advance migration preserves unrelated player advances", () => {
+test("group credit migration preserves unrelated player balances", () => {
   const context = createAppContext();
   setAppState(
     context,

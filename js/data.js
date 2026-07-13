@@ -68,7 +68,7 @@ function migrateState(data = {}, options = {}) {
       .map(([playerId, amount]) => [playerId, Number(amount || 0)])
       .filter(([playerId, amount]) => playerIds.has(playerId) && amount > 0)
   );
-  assignGroupPaymentAdvancesToPayers(migrated);
+  assignGroupPaymentCreditsToPayers(migrated);
   const previousState = state;
   state = migrated;
   migrated.sessions.forEach((session) => applyAutomaticSessionStage(session));
