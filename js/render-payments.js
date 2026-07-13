@@ -704,7 +704,7 @@ function renderPlayerBalanceRow(player) {
   const playerLabel = player.name || player.displayName || "Player";
   const historyItems = playerPaymentCorrectionItems(player.id);
   const covered = playerCoveredAmount(player.id);
-  const remainingCredit = playerRemainingCredit(player.id);
+  const remainingAdvance = playerRemainingAdvance(player.id);
   const due = playerBalance(player.id);
   return `
     <form class="row-card player-balance-row" data-form="player-payment">
@@ -717,7 +717,7 @@ function renderPlayerBalanceRow(player) {
               <span class="badge green">Covered ${currency(covered)}</span>
               <span class="player-balance-chip-pair">
                 <span class="badge ${due ? "gold" : "green"}">Due ${currency(due)}</span>
-                <span class="badge ${remainingCredit ? "teal" : "green"}">Credit ${currency(remainingCredit)}</span>
+                ${remainingAdvance > 0 ? `<span class="badge teal">Advance ${currency(remainingAdvance)}</span>` : ""}
               </span>
             </div>
           </div>

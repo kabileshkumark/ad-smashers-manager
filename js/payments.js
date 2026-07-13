@@ -1020,25 +1020,6 @@ function paymentGroupTransactions(groupId) {
     .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
 }
 
-function splitAmountAcrossPlayers(playerIds, amount) {
-  const ids = uniqueIds(playerIds).filter((playerId) => getPlayer(playerId)?.active !== false);
-  return splitAmountAcrossPlayerIds(ids, amount);
-}
-
-function splitAmountAcrossPlayerIds(playerIds, amount) {
-  const ids = uniqueIds(playerIds);
-  const cents = Math.max(0, Math.round(Number(amount || 0) * 100));
-  if (!ids.length || cents <= 0) return [];
-  const baseCents = Math.floor(cents / ids.length);
-  const extraCents = cents % ids.length;
-  return ids
-    .map((playerId, index) => ({
-      playerId,
-      amount: Number(((baseCents + (index < extraCents ? 1 : 0)) / 100).toFixed(2))
-    }))
-    .filter((item) => item.amount > 0);
-}
-
 function adjustStateAdvanceBalance(targetState, playerId, delta) {
   if (!playerId || !Number.isFinite(delta) || delta === 0) return;
   targetState.advances = targetState.advances || {};
@@ -1050,31 +1031,33 @@ function adjustStateAdvanceBalance(targetState, playerId, delta) {
   }
 }
 
-function rebalanceLegacyGroupAdvanceAllocations(targetState = state) {
-  const activeIds = new Set((targetState.players || []).filter((player) => player.active !== false).map((player) => player.id));
+function assignGroupPaymentAdvancesToPayers(targetState = state) {
+  const playerIds = new Set((targetState.players || []).map((player) => player.id));
   (targetState.paymentTransactions || []).forEach((transaction) => {
     if (transaction.type !== "group-payment") return;
-    const playerIds = uniqueIds(transaction.playerIds || []).filter((playerId) => activeIds.has(playerId));
-    if (playerIds.length <= 1) return;
+    const payerId = String(transaction.paidById || "");
+    if (!payerId || !playerIds.has(payerId)) return;
     const allocations = transaction.allocations || [];
     const advanceAllocations = allocations.filter((allocation) => allocation.type === "advance" && Number(allocation.amount || 0) > 0);
     const advanceTotal = Number(advanceAllocations.reduce((total, allocation) => total + Number(allocation.amount || 0), 0).toFixed(2));
     if (advanceTotal <= 0) return;
 
-    const expectedAdvances = splitAmountAcrossPlayerIds(playerIds, advanceTotal);
     const currentByPlayer = new Map();
     advanceAllocations.forEach((allocation) => {
       currentByPlayer.set(allocation.playerId, Number(((currentByPlayer.get(allocation.playerId) || 0) + Number(allocation.amount || 0)).toFixed(2)));
     });
-    const alreadySplit = expectedAdvances.every((allocation) => Number(currentByPlayer.get(allocation.playerId) || 0) === allocation.amount)
-      && currentByPlayer.size === expectedAdvances.length;
-    if (alreadySplit) return;
+    const alreadyAssignedToPayer = advanceAllocations.length === 1
+      && advanceAllocations[0].playerId === payerId
+      && Number(advanceAllocations[0].amount || 0) === advanceTotal;
+    if (alreadyAssignedToPayer) return;
 
-    advanceAllocations.forEach((allocation) => adjustStateAdvanceBalance(targetState, allocation.playerId, -Number(allocation.amount || 0)));
-    expectedAdvances.forEach((allocation) => adjustStateAdvanceBalance(targetState, allocation.playerId, allocation.amount));
+    new Set([...currentByPlayer.keys(), payerId]).forEach((playerId) => {
+      const targetAmount = playerId === payerId ? advanceTotal : 0;
+      adjustStateAdvanceBalance(targetState, playerId, targetAmount - Number(currentByPlayer.get(playerId) || 0));
+    });
     transaction.allocations = [
       ...allocations.filter((allocation) => allocation.type !== "advance"),
-      ...expectedAdvances.map((allocation) => ({ type: "advance", ...allocation }))
+      { type: "advance", playerId: payerId, sessionId: "", activityId: "", amount: advanceTotal }
     ];
     transaction.advanceAmount = advanceTotal;
   });
@@ -1152,7 +1135,6 @@ function applyGroupPayment({ paidById, playerIds, amountPaid, groupId = "" }) {
     return { applied: 0, remaining: Math.max(0, paidAmount || 0), allocations: [] };
   }
   let applied = 0;
-  let advanceTotal = 0;
   const allocations = [];
   const balanceByPlayer = new Map(selectedIds.map((playerId) => [playerId, playerBalance(playerId)]));
   const dueSplit = splitAmountAcrossPlayerBalances(selectedIds, paidAmount, balanceByPlayer);
@@ -1161,19 +1143,12 @@ function applyGroupPayment({ paidById, playerIds, amountPaid, groupId = "" }) {
     const result = applyGroupPaymentForPlayer(share.playerId, share.amount);
     applied += result.applied;
     allocations.push(...result.allocations);
-    if (result.remaining > 0) {
-      addPlayerAdvance(share.playerId, result.remaining);
-      advanceTotal += result.remaining;
-      allocations.push({ type: "advance", playerId: share.playerId, amount: Number(result.remaining.toFixed(2)) });
-    }
   });
 
-  if (dueSplit.remaining > 0) {
-    splitAmountAcrossPlayers(selectedIds, dueSplit.remaining).forEach((advance) => {
-      addPlayerAdvance(advance.playerId, advance.amount);
-      advanceTotal += advance.amount;
-      allocations.push({ type: "advance", playerId: advance.playerId, amount: advance.amount });
-    });
+  const advanceTotal = Math.max(0, Number((paidAmount - applied).toFixed(2)));
+  if (advanceTotal > 0) {
+    addPlayerAdvance(paidById, advanceTotal);
+    allocations.push({ type: "advance", playerId: paidById, amount: advanceTotal });
   }
   const transaction = {
     id: createId("payment-transaction"),
