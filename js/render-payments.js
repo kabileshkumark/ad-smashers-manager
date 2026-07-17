@@ -303,7 +303,7 @@ function renderPaymentGroupCard(group) {
         <div class="payment-group-actions">
           <label class="field compact-field payment-group-amount-field">
             <span class="visually-hidden">Paid Amount</span>
-            <input class="input" type="number" name="amountPaid" min="0" step="0.01" inputmode="decimal" autocomplete="off" />
+            <input class="input" type="number" name="amountPaid" min="0" step="0.01" inputmode="decimal" autocomplete="off" placeholder="0" />
           </label>
           <button class="btn primary icon-only" type="submit" ${balance > 0 ? "" : "disabled"} aria-label="Apply group payment for ${escapeAttr(group.name || "group")}" title="Apply group payment">${icon("wallet")}</button>
           <button class="btn icon-only" type="button" data-action="open-payment-group-copy" data-payment-group="${escapeAttr(group.id)}" aria-label="Copy payment details for ${escapeAttr(group.name || "group")}" title="Copy Payment Details">${icon("copy")}</button>

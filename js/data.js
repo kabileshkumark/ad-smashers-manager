@@ -5,8 +5,24 @@ function emptyState() {
       adminName: "",
       organizerPlayerId: "",
       coOrganizerPlayerId: "",
+      defaultSessionWeekday: 5,
+      defaultCourtId: "",
       defaultPlayersPerCourt: PLAYERS_PER_COURT,
       defaultShuttleCost: 5,
+      defaultFridayStartTime: "19:00",
+      defaultFridayEndTime: "21:00",
+      defaultFridayCourts: 2,
+      defaultSaturdayStartTime: "18:00",
+      defaultSaturdayEndTime: "20:00",
+      defaultSaturdayCourts: 2,
+      defaultFlexiDayStartTime: "20:00",
+      defaultFlexiDayEndTime: "22:00",
+      defaultFlexiDayCourts: 2,
+      autoCalculateCourtFee: true,
+      defaultCourtFee: 0,
+      autoCalculatePerPersonRate: true,
+      defaultPerPersonAmount: 0,
+      defaultRecurrence: "none",
       shuttleType: "Yonex Mavis 350 Green Cap",
       currency: "AED",
       pollTemplate: defaultPollTemplate(),
@@ -21,6 +37,105 @@ function emptyState() {
     paymentTransactions: [],
     advances: {}
   };
+}
+
+function normalizeSessionSettingTime(value, fallback) {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return fallback;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isInteger(hours) || hours < 0 || hours > 23 || !Number.isInteger(minutes) || minutes < 0 || minutes > 59) return fallback;
+  const normalized = Math.min(23 * 60 + 30, Math.round((hours * 60 + minutes) / 30) * 30);
+  return `${String(Math.floor(normalized / 60)).padStart(2, "0")}:${String(normalized % 60).padStart(2, "0")}`;
+}
+
+function normalizedIntegerSetting(value, fallback, minimum, maximum) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(maximum, Math.max(minimum, Math.floor(number)));
+}
+
+function normalizedAmountSetting(value, fallback = 0) {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? Math.max(0, amount) : fallback;
+}
+
+function normalizedBooleanSetting(value, fallback = true) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "string") return !["false", "0", "off", "no"].includes(value.trim().toLowerCase());
+  return Boolean(value);
+}
+
+function validateSessionSettingsCandidate(settings = {}) {
+  const weekday = Number(settings.defaultSessionWeekday);
+  if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) {
+    return { valid: false, message: "Select a valid default day." };
+  }
+  const playersPerCourt = Number(settings.defaultPlayersPerCourt);
+  if (!Number.isInteger(playersPerCourt) || playersPerCourt < 1 || playersPerCourt > 24) {
+    return { valid: false, message: "Players per Court must be between 1 and 24." };
+  }
+  const amountFields = [
+    ["defaultShuttleCost", "Shuttle Fee"],
+    ["defaultCourtFee", "Fixed Court Fee"],
+    ["defaultPerPersonAmount", "Fixed Per Person Rate"]
+  ];
+  for (const [fieldName, label] of amountFields) {
+    const amount = Number(settings[fieldName]);
+    if (!Number.isFinite(amount) || amount < 0) {
+      return { valid: false, message: `${label} must be zero or more.` };
+    }
+  }
+  for (const type of ["Friday", "Saturday", "FlexiDay"]) {
+    const startTime = String(settings[`default${type}StartTime`] || "");
+    const endTime = String(settings[`default${type}EndTime`] || "");
+    const courts = Number(settings[`default${type}Courts`]);
+    if (!/^([01]\d|2[0-3]):(00|30)$/.test(startTime) || !/^([01]\d|2[0-3]):(00|30)$/.test(endTime)) {
+      return { valid: false, message: `${type} times must use 30-minute intervals.` };
+    }
+    if (!Number.isInteger(courts) || courts < 1 || courts > 20) {
+      return { valid: false, message: `${type} Courts must be between 1 and 20.` };
+    }
+    const validation = validateCourtSlots([{ startTime, endTime, courts }]);
+    if (!validation.valid) {
+      return { valid: false, message: `${type} defaults: ${validation.message.replace("Court time slot 1", "time")}` };
+    }
+  }
+  return { valid: true, message: "", settings: normalizeSessionSettings(settings) };
+}
+
+function normalizeSessionSettings(settings = {}) {
+  const normalized = { ...settings };
+  delete normalized.defaultWaterCostPerTwoCourts;
+  delete normalized.autoCalculateWaterCost;
+  delete normalized.defaultWaterCost;
+  delete normalized.defaultRecurrenceWeeks;
+  normalized.defaultSessionWeekday = normalizedIntegerSetting(settings.defaultSessionWeekday, 5, 0, 6);
+  normalized.defaultCourtId = String(settings.defaultCourtId || "");
+  normalized.defaultPlayersPerCourt = normalizedIntegerSetting(settings.defaultPlayersPerCourt, PLAYERS_PER_COURT, 1, 24);
+  normalized.defaultShuttleCost = normalizedAmountSetting(settings.defaultShuttleCost, 5);
+  [
+    ["Friday", "19:00", "21:00"],
+    ["Saturday", "18:00", "20:00"],
+    ["FlexiDay", "20:00", "22:00"]
+  ].forEach(([type, fallbackStart, fallbackEnd]) => {
+    const startKey = `default${type}StartTime`;
+    const endKey = `default${type}EndTime`;
+    const courtsKey = `default${type}Courts`;
+    normalized[startKey] = normalizeSessionSettingTime(settings[startKey], fallbackStart);
+    normalized[endKey] = normalizeSessionSettingTime(settings[endKey], fallbackEnd);
+    if (normalized[startKey] === normalized[endKey]) {
+      normalized[startKey] = fallbackStart;
+      normalized[endKey] = fallbackEnd;
+    }
+    normalized[courtsKey] = normalizedIntegerSetting(settings[courtsKey], 2, 1, 20);
+  });
+  normalized.autoCalculateCourtFee = normalizedBooleanSetting(settings.autoCalculateCourtFee, true);
+  normalized.defaultCourtFee = normalizedAmountSetting(settings.defaultCourtFee, 0);
+  normalized.autoCalculatePerPersonRate = normalizedBooleanSetting(settings.autoCalculatePerPersonRate, true);
+  normalized.defaultPerPersonAmount = normalizedAmountSetting(settings.defaultPerPersonAmount, 0);
+  normalized.defaultRecurrence = settings.defaultRecurrence === "weekly" ? "weekly" : "none";
+  return normalized;
 }
 
 function migrateState(data = {}, options = {}) {
@@ -44,6 +159,7 @@ function migrateState(data = {}, options = {}) {
     paymentTransactions: collectionFallback(source.paymentTransactions, seeded.paymentTransactions || []),
     advances: source.advances || (useSeedCollections ? seeded.advances : {}) || {}
   };
+  migrated.settings = normalizeSessionSettings(migrated.settings);
   migrated.settings.pollTemplate = normalizePollTemplateCopy(migrated.settings.pollTemplate || defaultPollTemplate());
   if (!migrated.settings.finalListTemplate) {
     migrated.settings.finalListTemplate = defaultFinalListTemplate();
@@ -52,6 +168,9 @@ function migrateState(data = {}, options = {}) {
   }
   delete migrated.reminders;
   migrated.courts = migrated.courts.map((court) => normalizeCourt(court));
+  if (migrated.settings.defaultCourtId && !migrated.courts.some((court) => court.id === migrated.settings.defaultCourtId)) {
+    migrated.settings.defaultCourtId = "";
+  }
   migrated.players = migrated.players.map((player) => normalizePlayer(player));
   migrated.sessions = migrated.sessions.map((session) => normalizeSession(session, migrated.settings));
   migrated.sessions.forEach((session) => syncSessionPayments(session, migrated.players, migrated.settings));
@@ -198,17 +317,28 @@ function normalizeTextMap(value = {}) {
 function normalizeSession(session, settings = state?.settings || {}) {
   const playersPerCourt = Number(session.playersPerCourt || settings.defaultPlayersPerCourt || PLAYERS_PER_COURT);
   const type = sessionTypeForDate(session.date, session.type);
-  const fallbackExpectedPlayers = calculateExpectedPlayers(session.bookedCourts, playersPerCourt);
-  const expectedPlayers = storedNumberOrFallback(session.expectedPlayers, fallbackExpectedPlayers);
+  const hasCourtSlots = Array.isArray(session.courtSlots) && session.courtSlots.length > 0;
+  const courtSlots = hasCourtSlots ? sessionCourtSlots(session) : [];
+  const bookedCourts = hasCourtSlots ? courtSlotMaxCourts(courtSlots) : Number(session.bookedCourts || session.plannedCourts || 0);
+  const plannedCourts = hasCourtSlots ? bookedCourts : Number(session.plannedCourts ?? bookedCourts);
+  const startTime = hasCourtSlots ? courtSlots[0].startTime : session.startTime;
+  const endTime = hasCourtSlots ? courtSlots[courtSlots.length - 1].endTime : session.endTime;
+  const fallbackExpectedPlayers = calculateExpectedPlayers(bookedCourts, playersPerCourt);
+  const expectedPlayers = hasCourtSlots ? fallbackExpectedPlayers : storedNumberOrFallback(session.expectedPlayers, fallbackExpectedPlayers);
   const waterCost = storedNumberOrFallback(session.waterCost, 0);
   const fallbackPerPersonAmount = calculatePerPersonRate(
     session.totalPaid,
     expectedPlayers,
     session.shuttleCost ?? settings.defaultShuttleCost
   );
+  const recurrence = normalizeSessionRecurrence(session.recurrence);
   const normalized = {
     ...session,
     type,
+    startTime,
+    endTime,
+    plannedCourts,
+    bookedCourts,
     groupId: sessionGroupIdFor({ ...session, type }),
     stage: normalizeSessionStage(session),
     playersPerCourt,
@@ -235,6 +365,9 @@ function normalizeSession(session, settings = state?.settings || {}) {
     guestNames: normalizeTextMap(session.guestNames),
     sent: session.sent || {}
   };
+  if (recurrence) normalized.recurrence = recurrence;
+  else delete normalized.recurrence;
+  if (hasCourtSlots) normalized.courtSlots = courtSlots;
   if (Array.isArray(session.attendedPlayerIds)) {
     normalized.attendedPlayerIds = uniqueIds(session.attendedPlayerIds);
   }
@@ -576,15 +709,35 @@ function sessionTypeForDate(dateValue, fallbackType = "Friday") {
   return "Friday";
 }
 
-function sessionDefaultTimesForType(type) {
+function sessionDefaultTimesForType(type, settings = state?.settings || {}) {
   const normalizedType = sessionTypeForDate("", type);
-  if (normalizedType === "Friday") return { startTime: "19:00", endTime: "21:00" };
-  if (normalizedType === "Saturday") return { startTime: "18:00", endTime: "20:00" };
-  return { startTime: "20:00", endTime: "22:00" };
+  const fallbacks = normalizedType === "Friday"
+    ? { startTime: "19:00", endTime: "21:00" }
+    : normalizedType === "Saturday"
+      ? { startTime: "18:00", endTime: "20:00" }
+      : { startTime: "20:00", endTime: "22:00" };
+  const prefix = normalizedType === "FlexiDay" ? "FlexiDay" : normalizedType;
+  return {
+    startTime: normalizeSessionSettingTime(settings[`default${prefix}StartTime`], fallbacks.startTime),
+    endTime: normalizeSessionSettingTime(settings[`default${prefix}EndTime`], fallbacks.endTime)
+  };
 }
 
-function sessionDefaultTimesForDate(dateValue, fallbackType = "Friday") {
-  return sessionDefaultTimesForType(sessionTypeForDate(dateValue, fallbackType));
+function sessionDefaultCourtsForType(type, settings = state?.settings || {}) {
+  const normalizedType = sessionTypeForDate("", type);
+  const prefix = normalizedType === "FlexiDay" ? "FlexiDay" : normalizedType;
+  return normalizedIntegerSetting(settings[`default${prefix}Courts`], 2, 1, 20);
+}
+
+function sessionDefaultsForType(type, settings = state?.settings || {}) {
+  return {
+    ...sessionDefaultTimesForType(type, settings),
+    courts: sessionDefaultCourtsForType(type, settings)
+  };
+}
+
+function sessionDefaultTimesForDate(dateValue, fallbackType = "Friday", settings = state?.settings || {}) {
+  return sessionDefaultTimesForType(sessionTypeForDate(dateValue, fallbackType), settings);
 }
 
 function sessionGroupIdFor(session = {}) {

@@ -220,7 +220,7 @@ Dashboard reminder behavior:
 ## Core Workflow
 
 1. Create a weekly session for Friday, Saturday, or FlexiDay.
-2. Select court, date, time, expected courts, capacity, and booking status.
+2. Select court, date, and one or more court time slots; capacity and suggested court fee are derived from the allocation.
    - Usual Friday/Saturday flow: pre-book 2 courts before issuing the poll.
    - Some weeks may pre-book 3 courts before issuing the poll.
    - Occasional flow: publish the poll first, then book courts after enough responses.
@@ -381,17 +381,27 @@ Session fields:
 
 - Session type: Friday, Saturday, FlexiDay
 - Date
-- Time slot
+- Court time slots: repeatable From, To, and Courts rows
 - Court venue
-- Court count planned
-- Court count booked
+- Court allocation sequence, for example 3 courts from 8-9 PM and 2 courts from 9-10 PM
+- Maximum court count, derived from the highest slot allocation
 - Players per court, default 6
-- Max confirmed capacity, derived from court count
+- Max confirmed capacity, derived from maximum court count multiplied by players per court
 - Booking status
 - Poll status
 - Payment status
 - Reminder status
 - Notes
+
+Court-slot rules:
+
+- At least one slot is required, with different start and end times and a minimum of one court.
+- Slots may be adjacent or have a gap, but they must be chronological, must not overlap, and must fit within one 24-hour session.
+- The suggested court fee is venue hourly rate multiplied by total court-hours across all slots.
+- The session start/end summary is derived from the first slot start and last slot end.
+- Session cards show the court-count sequence, such as `3 → 2`, plus the time breakdown when more than one slot exists.
+- Legacy sessions without slot data retain their stored capacity until they are edited and saved with the slot model.
+- A slot change is a financial-basis change and follows the same active-payment mutation guard as date, court, fee, and rate changes.
 
 Session stages:
 
@@ -480,8 +490,7 @@ Views:
 
 Useful controls:
 
-- Add court
-- Remove court
+- Edit court time slots
 - Move to waitlist
 - Promote from waitlist
 - Copy allocation message

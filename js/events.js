@@ -27,28 +27,89 @@ function setSessionField(sessionId, fieldName, value) {
 }
 
 function updateSessionModalCalculations(form) {
-  if (form?.dataset.editId) return;
   const fields = form?.elements;
   if (!fields) return;
-  const courts = fields.courts?.value;
+  const courtSlots = sessionCourtSlotsFromForm(form);
+  const courts = courtSlotMaxCourts(courtSlots);
   const playersPerCourt = state.settings.defaultPlayersPerCourt || PLAYERS_PER_COURT;
   const shuttleCost = Number(fields.shuttleCost?.value ?? state.settings.defaultShuttleCost ?? 5);
-  const waterCostInput = fields.waterCost;
   const expectedPlayersInput = fields.expectedPlayers;
-  if (expectedPlayersInput && expectedPlayersInput.dataset.manual !== "true") {
+  if (expectedPlayersInput) {
     expectedPlayersInput.value = calculateExpectedPlayers(courts, playersPerCourt);
-  }
-  if (waterCostInput && waterCostInput.dataset.manual !== "true") {
-    waterCostInput.value = calculateWaterCost(courts);
   }
   const courtFeeInput = form?.querySelector("[data-court-fee-input]");
   if (courtFeeInput && courtFeeInput.dataset.manual !== "true") {
-    courtFeeInput.value = calculateCourtFee(fields.courtId?.value, fields.startTime?.value, fields.endTime?.value, courts);
+    courtFeeInput.value = calculateCourtFeeForSlots(fields.courtId?.value, courtSlots);
   }
   const perPersonInput = fields.perPersonAmount;
   if (perPersonInput && perPersonInput.dataset.manual !== "true") {
     perPersonInput.value = calculatePerPersonRate(fields.totalPaid?.value, fields.expectedPlayers?.value, shuttleCost);
   }
+  const summary = form?.querySelector("[data-session-court-slot-summary]");
+  if (summary) {
+    summary.textContent = `${Number(courtSlotCourtHours(courtSlots).toFixed(2))} court-hours; ${courts} courts set capacity`;
+  }
+}
+
+function sessionCourtSlotsFromForm(form) {
+  const rows = form?.querySelectorAll ? [...form.querySelectorAll("[data-session-court-slot]")] : [];
+  if (rows.length) {
+    return rows.map((row) => ({
+      startTime: row.querySelector('[name="slotStartTime"]')?.value || "00:00",
+      endTime: row.querySelector('[name="slotEndTime"]')?.value || "01:00",
+      courts: row.querySelector('[name="slotCourts"]')?.value || 1
+    }));
+  }
+  const fields = form?.elements || {};
+  return normalizeCourtSlots([], {
+    startTime: fields.startTime?.value || "00:00",
+    endTime: fields.endTime?.value || "01:00",
+    courts: fields.courts?.value || 1
+  });
+}
+
+function clockTimeAfter(value, minutesToAdd) {
+  const start = courtSlotClockMinutes(value);
+  const total = (start + Math.max(30, Number(minutesToAdd || 60))) % (24 * 60);
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function refreshSessionCourtSlotControls(form) {
+  const rows = form?.querySelectorAll ? [...form.querySelectorAll("[data-session-court-slot]")] : [];
+  rows.forEach((row, index) => {
+    const heading = row.querySelector(".session-court-slot-heading strong");
+    const removeButton = row.querySelector('[data-action="remove-session-court-slot"]');
+    if (heading) heading.textContent = `Time Slot ${index + 1}`;
+    if (removeButton) {
+      removeButton.disabled = rows.length <= 1;
+      removeButton.setAttribute("aria-label", `Remove time slot ${index + 1}`);
+    }
+  });
+}
+
+function updateSessionRecurrenceControls(form) {
+  if (!form || form.dataset.editId) return;
+  const frequency = normalizeRecurrenceFrequency(form.querySelector('[name="recurrence"]:checked')?.value || "none");
+  const fields = form.querySelector("[data-session-recurrence-fields]");
+  const endInput = form.querySelector("[data-session-recurrence-end]");
+  const startDate = form.elements.date?.value || "";
+  if (fields) fields.hidden = frequency !== "weekly";
+  if (endInput) {
+    endInput.disabled = frequency !== "weekly";
+    endInput.required = frequency === "weekly";
+    if (frequency === "weekly" && !endInput.value) {
+      endInput.value = startDate;
+    }
+  }
+  const plan = buildSessionRecurrencePlan(startDate, frequency, endInput?.value || "");
+  const summary = form.querySelector("[data-session-recurrence-summary]");
+  if (summary) {
+    summary.textContent = plan.valid && plan.dates.length
+      ? `${plan.dates.length} ${plan.dates.length === 1 ? "session" : "sessions"}`
+      : frequency === "weekly" ? "Check end date" : "One session";
+  }
+  const submit = form.querySelector("[data-session-submit-label]");
+  if (submit) submit.textContent = frequency === "weekly" ? "Create Sessions" : "Create Session";
 }
 
 function applySessionDateDefaults(form) {
@@ -57,10 +118,25 @@ function applySessionDateDefaults(form) {
   if (!fields?.date) return;
   const type = sessionTypeForDate(fields.date.value, fields.type?.value || "Friday");
   if (fields.type) fields.type.value = type;
-  const defaults = sessionDefaultTimesForType(type);
-  if (fields.startTime) fields.startTime.value = defaults.startTime;
-  if (fields.endTime) fields.endTime.value = defaults.endTime;
+  const defaults = sessionDefaultsForType(type);
+  const slotRows = form.querySelectorAll ? [...form.querySelectorAll("[data-session-court-slot]")] : [];
+  if (slotRows.length === 1) {
+    const startInput = slotRows[0].querySelector('[name="slotStartTime"]');
+    const endInput = slotRows[0].querySelector('[name="slotEndTime"]');
+    const courtsInput = slotRows[0].querySelector('[name="slotCourts"]');
+    if (startInput) startInput.value = defaults.startTime;
+    if (endInput) endInput.value = defaults.endTime;
+    if (courtsInput) courtsInput.value = defaults.courts;
+  } else {
+    if (fields.startTime) fields.startTime.value = defaults.startTime;
+    if (fields.endTime) fields.endTime.value = defaults.endTime;
+  }
+  const recurrenceEnd = form.querySelector("[data-session-recurrence-end]");
+  if (recurrenceEnd && recurrenceEnd.dataset.manual !== "true") {
+    recurrenceEnd.value = fields.date.value;
+  }
   updateSessionModalCalculations(form);
+  updateSessionRecurrenceControls(form);
 }
 
 function handlePointerDown(event) {
@@ -297,6 +373,36 @@ function handleClick(event) {
     return;
   }
 
+  if (action === "add-session-court-slot") {
+    const form = actionTarget.closest('form[data-form="session"]');
+    const list = form?.querySelector("[data-session-court-slot-list]");
+    if (!form || !list) return;
+    const slots = sessionCourtSlotsFromForm(form);
+    const lastSlot = slots[slots.length - 1] || { startTime: "20:00", endTime: "21:00", courts: 1 };
+    const durationMinutes = Math.max(30, sessionDurationHours(lastSlot.startTime, lastSlot.endTime) * 60 || 60);
+    const nextSlot = {
+      startTime: lastSlot.endTime,
+      endTime: clockTimeAfter(lastSlot.endTime, durationMinutes),
+      courts: lastSlot.courts
+    };
+    list.insertAdjacentHTML("beforeend", renderSessionCourtSlot(nextSlot, slots.length, slots.length + 1));
+    refreshSessionCourtSlotControls(form);
+    updateSessionModalCalculations(form);
+    list.lastElementChild?.querySelector('[name="slotCourts"]')?.focus();
+    return;
+  }
+
+  if (action === "remove-session-court-slot") {
+    const form = actionTarget.closest('form[data-form="session"]');
+    const row = actionTarget.closest("[data-session-court-slot]");
+    const rows = form?.querySelectorAll ? form.querySelectorAll("[data-session-court-slot]") : [];
+    if (!form || !row || rows.length <= 1) return;
+    row.remove();
+    refreshSessionCourtSlotControls(form);
+    updateSessionModalCalculations(form);
+    return;
+  }
+
   if (action === "open-session-modal") modal = { type: "session" };
   if (action === "open-court-modal") modal = { type: "court" };
   if (action === "open-player-modal") modal = { type: "player" };
@@ -459,11 +565,15 @@ function handleClick(event) {
   }
   if (action === "delete-session" && session) {
     const label = `${session.type} - ${formatDate(session.date)}`;
+    const recurring = Boolean(normalizeSessionRecurrence(session.recurrence));
     openDeleteConfirmation({
       deleteType: "session",
       sessionId: session.id,
-      title: "Delete Session",
-      message: `Delete ${label}? This cannot be undone.`
+      confirmLabel: recurring ? "Cancel Session" : "Delete",
+      title: recurring ? "Cancel Session" : "Delete Session",
+      message: recurring
+        ? `Cancel ${label}? Other sessions in this weekly schedule will stay unchanged.`
+        : `Delete ${label}? This cannot be undone.`
     });
     return;
   }
@@ -766,12 +876,6 @@ function handleClick(event) {
     saveState();
     showToast("Marked as sent.");
   }
-  if (action === "add-court" && session) {
-    session.bookedCourts = Number(session.bookedCourts || session.plannedCourts || 0) + 1;
-    session.plannedCourts = Math.max(Number(session.plannedCourts || 0), session.bookedCourts);
-    applyBookingStage(session, true);
-    saveState();
-  }
   if (action === "delete-response" && session) {
     const response = session.responses.find((item) => item.id === actionTarget.dataset.response);
     const playerName = response ? getPlayerName(response.playerId) : "this player";
@@ -910,13 +1014,23 @@ function handleInput(event) {
   if (expectedPlayersInput) {
     expectedPlayersInput.dataset.manual = "true";
   }
-  const waterCostInput = event.target.closest("[data-water-cost-input]");
-  if (waterCostInput) {
-    waterCostInput.dataset.manual = "true";
-  }
   const perPersonInput = event.target.closest("[data-per-person-input]");
   if (perPersonInput) {
     perPersonInput.dataset.manual = "true";
+  }
+  const recurrenceEndInput = event.target.closest("[data-session-recurrence-end]");
+  if (recurrenceEndInput) recurrenceEndInput.dataset.manual = "true";
+  const recurrenceSource = event.target.closest("[data-session-recurrence-source]");
+  if (recurrenceSource) {
+    updateSessionRecurrenceControls(recurrenceSource.closest('form[data-form="session"]'));
+    return;
+  }
+  const defaultAutoToggle = event.target.closest("[data-session-default-auto]");
+  if (defaultAutoToggle) {
+    const form = defaultAutoToggle.closest('form[data-form="session-defaults"]');
+    const controlledInput = form?.elements?.[defaultAutoToggle.dataset.controls];
+    if (controlledInput) controlledInput.disabled = defaultAutoToggle.checked;
+    return;
   }
   const halfHourTimeInput = event.target.closest("[data-half-hour-time]");
   if (halfHourTimeInput && halfHourTimeInput.value) {
@@ -930,7 +1044,7 @@ function handleInput(event) {
     applySessionDateDefaults(sessionDateSource.closest('form[data-form="session"]'));
     return;
   }
-  const sessionCalculationSource = event.target.closest("[data-session-cost-source], [data-session-capacity-source], [data-session-rate-source], [data-court-fee-input], [data-water-cost-input]");
+  const sessionCalculationSource = event.target.closest("[data-session-cost-source], [data-session-capacity-source], [data-session-rate-source], [data-court-fee-input]");
   if (sessionCalculationSource) {
     updateSessionModalCalculations(sessionCalculationSource.closest('form[data-form="session"]'));
     return;
@@ -989,6 +1103,45 @@ async function handleSubmit(event) {
   const formData = new FormData(form);
   const data = Object.fromEntries(formData.entries());
 
+  if (formType === "session-defaults") {
+    const fields = form.elements;
+    const candidate = {
+      ...state.settings,
+      defaultSessionWeekday: fields.defaultSessionWeekday.value,
+      defaultCourtId: fields.defaultCourtId.value,
+      defaultPlayersPerCourt: fields.defaultPlayersPerCourt.value,
+      defaultShuttleCost: fields.defaultShuttleCost.value,
+      defaultFridayStartTime: fields.defaultFridayStartTime.value,
+      defaultFridayEndTime: fields.defaultFridayEndTime.value,
+      defaultFridayCourts: fields.defaultFridayCourts.value,
+      defaultSaturdayStartTime: fields.defaultSaturdayStartTime.value,
+      defaultSaturdayEndTime: fields.defaultSaturdayEndTime.value,
+      defaultSaturdayCourts: fields.defaultSaturdayCourts.value,
+      defaultFlexiDayStartTime: fields.defaultFlexiDayStartTime.value,
+      defaultFlexiDayEndTime: fields.defaultFlexiDayEndTime.value,
+      defaultFlexiDayCourts: fields.defaultFlexiDayCourts.value,
+      autoCalculateCourtFee: fields.autoCalculateCourtFee.checked,
+      defaultCourtFee: fields.defaultCourtFee.value,
+      autoCalculatePerPersonRate: fields.autoCalculatePerPersonRate.checked,
+      defaultPerPersonAmount: fields.defaultPerPersonAmount.value,
+      defaultRecurrence: fields.defaultRecurrence.value
+    };
+    const validation = validateSessionSettingsCandidate(candidate);
+    if (!validation.valid) {
+      showToast(validation.message);
+      return;
+    }
+    if (candidate.defaultCourtId && !state.courts.some((court) => court.id === candidate.defaultCourtId)) {
+      showToast("Select an available default court.");
+      return;
+    }
+    state.settings = validation.settings;
+    saveState();
+    render();
+    showToast("Session defaults saved.");
+    return;
+  }
+
   if (formType === "login") {
     const email = String(data.email || "").trim();
     const password = String(data.password || "");
@@ -1026,23 +1179,31 @@ async function handleSubmit(event) {
     const groupId = sessionGroupIdFor({ date: data.date, type });
     const existingSession = editId ? getSession(editId) : null;
     const defaultTimes = sessionDefaultTimesForDate(data.date, type);
-    const startTime = normalizeHalfHourTime(data.startTime, defaultTimes.startTime);
-    const endTime = normalizeHalfHourTime(data.endTime, defaultTimes.endTime);
-    const courts = Math.max(1, Number(data.courts || 2));
+    const slotValidation = validateCourtSlots(sessionCourtSlotsFromForm(form));
+    if (!slotValidation.valid) {
+      showToast(slotValidation.message);
+      return;
+    }
+    const courtSlots = slotValidation.slots;
+    const startTime = normalizeHalfHourTime(courtSlots[0]?.startTime, defaultTimes.startTime);
+    const endTime = normalizeHalfHourTime(courtSlots[courtSlots.length - 1]?.endTime, defaultTimes.endTime);
+    const courts = courtSlotMaxCourts(courtSlots);
     const bookedCourts = courts;
     const playersPerCourt = Number(existingSession?.playersPerCourt || state.settings.defaultPlayersPerCourt || PLAYERS_PER_COURT);
-    const expectedPlayers = existingSession ? Number(data.expectedPlayers || 0) : expectedPlayersValue(data.expectedPlayers, bookedCourts, playersPerCourt);
+    const expectedPlayers = calculateExpectedPlayers(bookedCourts, playersPerCourt);
     const totalPaid = existingSession
       ? Number(data.totalPaid || 0)
       : data.totalPaid === ""
-        ? calculateCourtFee(data.courtId, startTime, endTime, bookedCourts)
+        ? calculateCourtFeeForSlots(data.courtId, courtSlots)
         : Number(data.totalPaid || 0);
     const shuttleCost = data.shuttleCost === ""
       ? Number(existingSession?.shuttleCost ?? state.settings.defaultShuttleCost ?? 5)
       : Number(data.shuttleCost ?? existingSession?.shuttleCost ?? state.settings.defaultShuttleCost ?? 5);
-    const waterCost = data.waterCost === ""
-      ? Number(existingSession?.waterCost ?? (existingSession ? 0 : calculateWaterCost(bookedCourts)))
-      : Number(data.waterCost ?? existingSession?.waterCost ?? (existingSession ? 0 : calculateWaterCost(bookedCourts)));
+    const waterCost = data.waterCost === "" ? 0 : Number(data.waterCost);
+    if (!Number.isFinite(waterCost) || waterCost < 0) {
+      showToast("Water Cost must be zero or more.");
+      return;
+    }
     const perPersonManual = form.elements.perPersonAmount?.dataset.manual === "true";
     const perPersonAmount = existingSession
       ? Number(data.perPersonAmount || 0)
@@ -1052,6 +1213,7 @@ async function handleSubmit(event) {
       date: data.date,
       startTime,
       endTime,
+      courtSlots,
       groupId,
       courtId: data.courtId,
       plannedCourts: courts,
@@ -1067,17 +1229,7 @@ async function handleSubmit(event) {
     };
     let session = existingSession;
     if (existingSession) {
-      const changedFinancialBasis = [
-        "date",
-        "startTime",
-        "endTime",
-        "courtId",
-        "bookedCourts",
-        "totalPaid",
-        "shuttleCost",
-        "waterCost",
-        "perPersonAmount"
-      ].some((fieldName) => String(existingSession[fieldName] ?? "") !== String(sessionData[fieldName] ?? ""));
+      const changedFinancialBasis = sessionFinancialBasisChanged(existingSession, sessionData);
       if (changedFinancialBasis && sessionHasActiveFinancialState(existingSession)) {
         showToast("Clear active cash, Advance, or Credit coverage before changing this session's financial basis.");
         render();
@@ -1089,17 +1241,18 @@ async function handleSubmit(event) {
       syncSessionPayments(existingSession);
       showToast("Session updated.");
     } else {
-      session = {
-        id: createId("session"),
-        ...sessionData,
-        pollStatus: "Draft",
-        notes: "",
-        responses: [],
-        payments: {},
-        sent: {}
-      };
-      state.sessions.push(session);
-      showToast("Session created.");
+      const creation = buildNewSessionRecords(
+        { ...sessionData, pollStatus: "Draft" },
+        { frequency: data.recurrence || "none", endDate: data.recurrenceEndDate || "" },
+        state.sessions
+      );
+      if (!creation.valid) {
+        showToast(creation.message);
+        return;
+      }
+      state.sessions.push(...creation.records);
+      session = creation.records[0];
+      showToast(creation.records.length === 1 ? "Session created." : `${creation.records.length} weekly sessions created.`);
     }
     activeSessionId = session.id;
     uiState.sessionWeekStart = weekStartIso(session.date);

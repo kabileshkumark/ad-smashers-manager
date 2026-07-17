@@ -3,7 +3,7 @@ const FIREBASE_AUTH_STORAGE_KEY = "ad-smashers-firebase-auth-v1";
 const FIREBASE_CLIENT_STORAGE_KEY = "ad-smashers-firebase-client-v1";
 const PENDING_CLOUD_STATE_STORAGE_KEY = "ad-smashers-pending-cloud-state-v1";
 const PENDING_CLOUD_JOURNAL_SCHEMA_VERSION = 1;
-const APP_VERSION = "1.0.5";
+const APP_VERSION = "1.0.6";
 const APP_BUILD_VERSION = APP_VERSION;
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyD5Xv6DdYbH2bHhxePxcbRLBpoGLUjtzcE",
@@ -27,6 +27,7 @@ const AD_SMASHERS_OWNER_PERMISSIONS = {
   viewReports: true
 };
 const PLAYERS_PER_COURT = 6;
+const MAX_RECURRING_SESSIONS = 53;
 const DEFAULT_PAYMENT_METHOD = "Bank";
 const DEFAULT_RACKET_OWNED = "Yes";
 const STANDARD_POLL_OPTIONS = ["1. I'm in", "2. I'm in +1", "3. I'm in +2", "4. I need a racket"].join("\n");

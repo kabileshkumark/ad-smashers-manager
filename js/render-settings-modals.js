@@ -42,10 +42,7 @@ function renderSettings() {
             <p>Used when creating a new session.</p>
           </div>
         </div>
-        <div class="form-grid two">
-          ${settingsField("defaultPlayersPerCourt", "Players per Court", "number", state.settings.defaultPlayersPerCourt || PLAYERS_PER_COURT, 'min="1" step="1"')}
-          ${settingsField("defaultShuttleCost", "Shuttle Fee", "number", state.settings.defaultShuttleCost ?? 5, 'min="0" step="1"')}
-        </div>
+        ${renderSessionDefaultsSettings()}
       </section>
       <section class="panel">
         <div class="section-heading">
@@ -63,6 +60,103 @@ function renderSettings() {
       </section>
       ${renderTemplateSettingsSection()}
     </section>
+  `;
+}
+
+function renderSessionDefaultsSettings() {
+  const settings = normalizeSessionSettings(state.settings || {});
+  const weekdayOptions = [
+    [0, "Sunday"],
+    [1, "Monday"],
+    [2, "Tuesday"],
+    [3, "Wednesday"],
+    [4, "Thursday"],
+    [5, "Friday"],
+    [6, "Saturday"]
+  ];
+  const courtOptions = [
+    { value: "", label: "First available court" },
+    ...orderedCourtOptions().map((court) => ({ value: court.id, label: court.name || "Court" }))
+  ];
+  return `
+    <form class="session-defaults-form" data-form="session-defaults">
+      <section class="session-defaults-group">
+        <h3>General</h3>
+        <div class="form-grid two">
+          ${settingsFormSelect("defaultSessionWeekday", "Default Day", weekdayOptions.map(([value, label]) => ({ value: String(value), label })), String(settings.defaultSessionWeekday))}
+          ${settingsFormSelect("defaultCourtId", "Default Court", courtOptions, settings.defaultCourtId)}
+          ${settingsFormField("defaultPlayersPerCourt", "Players per Court", "number", settings.defaultPlayersPerCourt, 'min="1" max="24" step="1" required')}
+          ${settingsFormField("defaultShuttleCost", "Shuttle Fee", "number", settings.defaultShuttleCost, 'min="0" step="0.01" required')}
+          ${settingsFormSelect("defaultRecurrence", "Default Repeat", [
+            { value: "none", label: "Once" },
+            { value: "weekly", label: "Weekly" }
+          ], settings.defaultRecurrence)}
+        </div>
+      </section>
+      <section class="session-defaults-group">
+        <h3>Schedule by Day</h3>
+        <div class="session-default-schedule-list">
+          ${renderSessionDefaultScheduleRow("Friday", settings)}
+          ${renderSessionDefaultScheduleRow("Saturday", settings)}
+          ${renderSessionDefaultScheduleRow("FlexiDay", settings)}
+        </div>
+      </section>
+      <section class="session-defaults-group">
+        <h3>Calculation Defaults</h3>
+        <div class="session-default-calculation-list">
+          ${renderSessionDefaultCalculation(
+            "autoCalculateCourtFee",
+            "Calculate Court Fee",
+            "Use court rate and total court-hours",
+            "defaultCourtFee",
+            "Fixed Court Fee",
+            settings.autoCalculateCourtFee,
+            settings.defaultCourtFee
+          )}
+          ${renderSessionDefaultCalculation(
+            "autoCalculatePerPersonRate",
+            "Calculate Per Person Rate",
+            "Use court fee, capacity, and shuttle fee",
+            "defaultPerPersonAmount",
+            "Fixed Per Person Rate",
+            settings.autoCalculatePerPersonRate,
+            settings.defaultPerPersonAmount
+          )}
+        </div>
+      </section>
+      <div class="toolbar session-defaults-actions">
+        <button class="btn primary" type="submit">Save Session Defaults</button>
+      </div>
+    </form>
+  `;
+}
+
+function renderSessionDefaultScheduleRow(type, settings) {
+  const startKey = `default${type}StartTime`;
+  const endKey = `default${type}EndTime`;
+  const courtsKey = `default${type}Courts`;
+  const label = type === "FlexiDay" ? "FlexiDay" : type;
+  return `
+    <div class="session-default-schedule-row">
+      <strong>${escapeHtml(label)}</strong>
+      <div class="session-default-schedule-fields">
+        ${settingsFormField(startKey, "From", "time", settings[startKey], 'step="1800" required')}
+        ${settingsFormField(endKey, "To", "time", settings[endKey], 'step="1800" required')}
+        ${settingsFormField(courtsKey, "Courts", "number", settings[courtsKey], 'min="1" max="20" step="1" required')}
+      </div>
+    </div>
+  `;
+}
+
+function renderSessionDefaultCalculation(autoName, title, detail, amountName, amountLabel, checked, amount) {
+  return `
+    <div class="session-default-calculation-row">
+      <label class="settings-checkbox">
+        <input type="checkbox" name="${escapeAttr(autoName)}" data-session-default-auto data-controls="${escapeAttr(amountName)}" ${checked ? "checked" : ""} />
+        <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(detail)}</small></span>
+      </label>
+      ${settingsFormField(amountName, amountLabel, "number", amount, `min="0" step="0.01" required ${checked ? "disabled" : ""}`)}
+    </div>
   `;
 }
 
@@ -743,6 +837,49 @@ function renderSessionStageModal(sessionId = "") {
   `;
 }
 
+function renderSessionCourtSlot(slot, index, slotCount) {
+  return `
+    <div class="session-court-slot" data-session-court-slot>
+      <div class="session-court-slot-heading">
+        <strong>Time Slot ${index + 1}</strong>
+        <button class="btn icon-only danger" type="button" data-action="remove-session-court-slot" aria-label="Remove time slot ${index + 1}" title="Remove time slot" ${slotCount > 1 ? "" : "disabled"}>${icon("trash")}</button>
+      </div>
+      <div class="session-court-slot-fields">
+        ${timeSelectField("slotStartTime", "From", slot.startTime, "modal", "data-session-cost-source")}
+        ${timeSelectField("slotEndTime", "To", slot.endTime, "modal", "data-session-cost-source")}
+        ${numberField("slotCourts", "Courts", slot.courts, 1, "modal", "data-session-cost-source data-session-capacity-source")}
+      </div>
+    </div>
+  `;
+}
+
+function renderSessionRecurrenceControls(frequency, endDate, startDate) {
+  const weekly = frequency === "weekly";
+  const plan = buildSessionRecurrencePlan(startDate, frequency, endDate);
+  const count = plan.valid ? plan.dates.length : 0;
+  return `
+    <section class="session-recurrence" aria-labelledby="session-recurrence-title">
+      <div class="session-recurrence-heading">
+        <h3 id="session-recurrence-title">Repeat</h3>
+        <span data-session-recurrence-summary>${weekly && count ? `${count} ${count === 1 ? "session" : "sessions"}` : "One session"}</span>
+      </div>
+      <div class="segmented-control" role="radiogroup" aria-label="Session recurrence">
+        <label>
+          <input type="radio" name="recurrence" value="none" data-session-recurrence-source ${weekly ? "" : "checked"} />
+          <span>Once</span>
+        </label>
+        <label>
+          <input type="radio" name="recurrence" value="weekly" data-session-recurrence-source ${weekly ? "checked" : ""} />
+          <span>Weekly</span>
+        </label>
+      </div>
+      <div class="session-recurrence-fields" data-session-recurrence-fields ${weekly ? "" : "hidden"}>
+        ${field("recurrenceEndDate", "Repeat Until", "date", endDate, "modal", `data-session-recurrence-end data-session-recurrence-source ${weekly ? "required" : "disabled"}`)}
+      </div>
+    </section>
+  `;
+}
+
 function renderSessionModal(sessionId = "") {
   const session = sessionId ? getSession(sessionId) : null;
   const isEdit = Boolean(session);
@@ -762,26 +899,48 @@ function renderSessionModal(sessionId = "") {
       </div>
     `;
   }
-  const sessionDate = session?.date || nextWeekdayDate(5);
+  const settings = normalizeSessionSettings(state.settings || {});
+  const sessionDate = session?.date || nextWeekdayDate(settings.defaultSessionWeekday);
   const sessionType = sessionTypeForDate(sessionDate, session?.type || "Friday");
-  const defaultTimes = sessionDefaultTimesForDate(sessionDate, sessionType);
-  const startTime = normalizeHalfHourTime(session?.startTime, defaultTimes.startTime);
-  const endTime = normalizeHalfHourTime(session?.endTime, defaultTimes.endTime);
-  const courtId = session?.courtId || orderedCourtOptions()[0]?.id || "";
-  const courts = Number(session?.bookedCourts || session?.plannedCourts || 2);
+  const sessionDefaults = sessionDefaultsForType(sessionType, settings);
+  const defaultTimes = { startTime: sessionDefaults.startTime, endTime: sessionDefaults.endTime };
+  const configuredCourtId = orderedCourtOptions().some((court) => court.id === settings.defaultCourtId) ? settings.defaultCourtId : "";
+  const courtId = session?.courtId || configuredCourtId || orderedCourtOptions()[0]?.id || "";
+  const courtSlots = sessionCourtSlots(session || {
+    startTime: defaultTimes.startTime,
+    endTime: defaultTimes.endTime,
+    bookedCourts: sessionDefaults.courts,
+    plannedCourts: sessionDefaults.courts
+  }).map((slot) => ({
+    ...slot,
+    startTime: normalizeHalfHourTime(slot.startTime, defaultTimes.startTime),
+    endTime: normalizeHalfHourTime(slot.endTime, defaultTimes.endTime)
+  }));
+  const courts = courtSlotMaxCourts(courtSlots);
   const playersPerCourt = Number(session?.playersPerCourt || state.settings.defaultPlayersPerCourt || PLAYERS_PER_COURT);
   const calculatedExpectedPlayers = calculateExpectedPlayers(courts, playersPerCourt);
-  const expectedPlayers = isEdit ? Number(session?.expectedPlayers ?? 0) : expectedPlayersValue(session?.expectedPlayers, courts, playersPerCourt);
-  const expectedPlayersAttrs = `data-expected-players-input${isEdit || expectedPlayers !== calculatedExpectedPlayers ? ' data-manual="true"' : ""}`;
-  const calculatedCourtFee = calculateCourtFee(courtId, startTime, endTime, courts);
-  const totalPaid = isEdit ? Number(session?.totalPaid ?? 0) : Number(session?.totalPaid || 0) || calculatedCourtFee;
-  const shuttleCost = Number(session?.shuttleCost ?? state.settings.defaultShuttleCost ?? 5);
-  const calculatedWaterCost = calculateWaterCost(courts);
-  const waterCost = isEdit ? Number(session?.waterCost ?? 0) : Number(session?.waterCost ?? calculatedWaterCost);
-  const waterCostAttrs = `data-water-cost-input${isEdit || waterCost !== calculatedWaterCost ? ' data-manual="true"' : ""}`;
+  const expectedPlayers = calculatedExpectedPlayers;
+  const calculatedCourtFee = calculateCourtFeeForSlots(courtId, courtSlots);
+  const totalPaid = isEdit
+    ? Number(session?.totalPaid ?? 0)
+    : settings.autoCalculateCourtFee
+      ? calculatedCourtFee
+      : settings.defaultCourtFee;
+  const totalPaidManual = isEdit ? totalPaid !== calculatedCourtFee : !settings.autoCalculateCourtFee;
+  const totalPaidAttrs = `data-court-fee-input${totalPaidManual ? ' data-manual="true"' : ""}`;
+  const shuttleCost = Number(session?.shuttleCost ?? settings.defaultShuttleCost ?? 5);
+  const waterCost = Number(session?.waterCost ?? 0);
+  const waterCostAttrs = 'data-water-cost-input data-manual="true"';
   const calculatedPerPersonAmount = calculatePerPersonRate(totalPaid, expectedPlayers, shuttleCost);
-  const perPersonAmount = isEdit ? Number(session?.perPersonAmount ?? 0) : perPersonRateValue(session?.perPersonAmount, totalPaid, expectedPlayers, shuttleCost);
-  const perPersonAttrs = `data-per-person-input${isEdit || perPersonAmount !== calculatedPerPersonAmount ? ' data-manual="true"' : ""}`;
+  const perPersonAmount = isEdit
+    ? Number(session?.perPersonAmount ?? 0)
+    : settings.autoCalculatePerPersonRate
+      ? calculatedPerPersonAmount
+      : settings.defaultPerPersonAmount;
+  const perPersonManual = isEdit ? perPersonAmount !== calculatedPerPersonAmount : !settings.autoCalculatePerPersonRate;
+  const perPersonAttrs = `data-per-person-input${perPersonManual ? ' data-manual="true"' : ""}`;
+  const recurrenceFrequency = isEdit ? "none" : normalizeRecurrenceFrequency(settings.defaultRecurrence);
+  const recurrenceEndDate = sessionDate;
   return `
     <div class="modal-backdrop" data-modal-backdrop>
       <form class="modal-card" data-form="session" data-edit-id="${escapeAttr(session?.id || "")}" role="dialog" aria-modal="true" aria-labelledby="session-modal-title">
@@ -794,27 +953,34 @@ function renderSessionModal(sessionId = "") {
             ${field("date", "Date", "date", sessionDate, "modal", "data-session-date-source")}
             ${selectSimple("type", "Session Type", ["Friday", "Saturday", "FlexiDay"], sessionType, "modal")}
           </div>
-          <div class="session-form-row two">
-            ${timeSelectField("startTime", "Start Time", startTime, "modal", "data-session-cost-source")}
-            ${timeSelectField("endTime", "End Time", endTime, "modal", "data-session-cost-source")}
-          </div>
           ${selectField("courtId", "Court", orderedCourtOptions(), courtId, "name", "modal", "data-session-cost-source")}
+          <section class="session-court-slots" aria-labelledby="session-court-slots-title">
+            <div class="session-court-slots-heading">
+              <div>
+                <h3 id="session-court-slots-title">Court Time Slots</h3>
+                <p>Set the court count for each part of this session.</p>
+              </div>
+              <button class="btn icon-only" type="button" data-action="add-session-court-slot" aria-label="Add court time slot" title="Add time slot">${icon("plus")}</button>
+            </div>
+            <div class="session-court-slot-list" data-session-court-slot-list>
+              ${courtSlots.map((slot, index) => renderSessionCourtSlot(slot, index, courtSlots.length)).join("")}
+            </div>
+            <p class="session-court-slot-summary" data-session-court-slot-summary>${escapeHtml(`${Number(courtSlotCourtHours(courtSlots).toFixed(2))} court-hours; ${courts} courts set capacity`)}</p>
+          </section>
           <div class="session-form-row two">
-            ${numberField("courts", "Courts", courts, 1, "modal", "data-session-cost-source data-session-capacity-source")}
-            ${numberField("expectedPlayers", "Expected Players", expectedPlayers, 0, "modal", `${expectedPlayersAttrs} data-session-rate-source`)}
+            ${numberField("expectedPlayers", "Capacity", expectedPlayers, 0, "modal", "data-expected-players-input data-session-rate-source readonly aria-readonly=\"true\"")}
+            ${numberField("waterCost", "Water Cost", waterCost, 0, "modal", waterCostAttrs)}
           </div>
           <div class="session-form-row two">
-            ${numberField("totalPaid", "Court Fee", totalPaid, 0, "modal", "data-court-fee-input data-session-rate-source")}
+            ${numberField("totalPaid", "Court Fee", totalPaid, 0, "modal", `${totalPaidAttrs} data-session-rate-source`)}
             ${numberField("shuttleCost", "Shuttle Fee", shuttleCost, 0, "modal", "data-session-rate-source")}
           </div>
-          <div class="session-form-row two">
-            ${numberField("waterCost", "Water Cost", waterCost, 0, "modal", waterCostAttrs)}
-            ${numberField("perPersonAmount", "Per Person Rate", perPersonAmount, 0, "modal", perPersonAttrs)}
-          </div>
+          ${numberField("perPersonAmount", "Per Person Rate", perPersonAmount, 0, "modal", perPersonAttrs)}
+          ${isEdit ? "" : renderSessionRecurrenceControls(recurrenceFrequency, recurrenceEndDate, sessionDate)}
         </div>
         <div class="toolbar modal-actions">
           <button class="btn" type="button" data-action="close-modal">Cancel</button>
-          <button class="btn primary" type="submit">${isEdit ? "Save Session" : "Create Session"}</button>
+          <button class="btn primary" type="submit" data-session-submit-label>${isEdit ? "Save Session" : recurrenceFrequency === "weekly" ? "Create Sessions" : "Create Session"}</button>
         </div>
       </form>
     </div>
@@ -911,6 +1077,26 @@ function settingsField(name, label, type, value, extraAttrs = "") {
     <label class="field">
       <span>${escapeHtml(label)}</span>
       <input class="input" type="${escapeAttr(type)}" data-setting-field="${escapeAttr(name)}" value="${escapeAttr(value)}" ${extraAttrs} />
+    </label>
+  `;
+}
+
+function settingsFormField(name, label, type, value, extraAttrs = "") {
+  return `
+    <label class="field">
+      <span>${escapeHtml(label)}</span>
+      <input class="input" type="${escapeAttr(type)}" name="${escapeAttr(name)}" value="${escapeAttr(value)}" ${extraAttrs} />
+    </label>
+  `;
+}
+
+function settingsFormSelect(name, label, options, value) {
+  return `
+    <label class="field">
+      <span>${escapeHtml(label)}</span>
+      <select class="select" name="${escapeAttr(name)}">
+        ${options.map((option) => `<option value="${escapeAttr(option.value)}" ${String(option.value) === String(value) ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+      </select>
     </label>
   `;
 }

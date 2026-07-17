@@ -28,6 +28,15 @@ The regression suite in `tests/regression.test.js` loads the same browser JavaSc
   - Friday sessions use the Friday group.
   - Saturday sessions use the Saturday group.
   - Other days use the FlexiDay group.
+- Repeatable court time slots:
+  - reject equal-time and overlapping slots,
+  - support valid overnight sequences within 24 hours,
+  - calculate fee from total court-hours,
+  - derive capacity and allocation from the highest court count,
+  - preserve legacy single-allocation session capacity until edit,
+  - persist the slot array through Firestore value conversion,
+  - include slot changes in the protected financial basis,
+  - aggregate court-hours correctly on Dashboard.
 - Court list ordering pins the Booking court first, then sorts normal courts alphabetically.
 - Admin-added poll guests can exceed two guests while the poll vote label remains `I'm in +2`.
 - Manual confirmed players who did not vote can have guests added without creating voter-list entries.
@@ -68,6 +77,15 @@ After `npm test` passes, check these once in the app for larger UI or deployment
   - clear players should appear last.
   - for a group payer with remaining Credit and another member with a due, confirm the group shows the net cash payable amount,
   - apply the group payment and confirm Credit is used before cash, the member due clears, and payment history records the Credit used.
+  - at 320 px and 390 px widths, confirm each Payment Group name remains on one line, all five actions stay in the top-right row, the status chip sits below, and the empty amount field shows only a faint `0` placeholder.
+- Create or edit a session with 3 courts from 8-9 PM and 2 courts from 9-10 PM:
+  - confirm the summary reports 5 court-hours,
+  - confirm capacity uses 3 courts multiplied by Players per Court,
+  - confirm the suggested court fee is the venue hourly rate multiplied by 5,
+  - confirm the session card shows `3 → 2` and both time ranges,
+  - confirm the court-booking message includes the allocation breakdown and 5 total court-hours,
+  - try an overlapping second slot and confirm Save is blocked without changing the session,
+  - add and remove a slot at mobile width and confirm controls remain fully visible without horizontal overflow.
 - Verify bottom navigation remains visible and usable on mobile.
 - Verify no page zoom is possible in the installed PWA.
 
