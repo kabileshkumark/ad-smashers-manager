@@ -1409,10 +1409,13 @@ img {
 
 .player-balance-actions {
   display: grid;
-  grid-template-columns: 62px repeat(3, 44px);
+  grid-template-columns: minmax(44px, 1.35fr) repeat(3, minmax(34px, 1fr));
   align-items: center;
   gap: 6px;
-  width: auto;
+  width: clamp(168px, 42vw, 212px);
+  margin-left: auto;
+  align-self: start;
+  justify-self: end;
 }
 
 .compact-field {
@@ -1420,7 +1423,19 @@ img {
 }
 
 .player-balance-actions .input {
+  height: 100%;
+  min-height: 34px;
+  padding-right: 7px;
+  padding-left: 7px;
   text-align: center;
+}
+
+.player-balance-actions .btn.icon-only {
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: 0;
+  aspect-ratio: 1;
 }
 
 .advance-panel {
@@ -1637,7 +1652,7 @@ img {
 
 .payment-group-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   min-width: 0;
 }
@@ -1658,22 +1673,32 @@ img {
 
 .payment-group-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(236px, 314px);
+  grid-template-areas:
+    "title actions"
+    "details details";
   align-items: flex-start;
-  gap: 10px;
+  gap: 8px;
 }
 
 .payment-group-info {
-  display: grid;
-  gap: 4px;
+  display: contents;
   min-width: 0;
 }
 
 .payment-group-title-line {
+  grid-area: title;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
+}
+
+.payment-group-details {
+  grid-area: details;
+  display: grid;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -1682,12 +1707,13 @@ img {
 }
 
 .payment-group-actions {
+  grid-area: actions;
   display: grid;
-  grid-template-columns: minmax(56px, 84px) repeat(5, minmax(36px, 44px));
+  grid-template-columns: minmax(44px, 1.35fr) repeat(5, minmax(34px, 1fr));
   align-items: stretch;
   justify-content: end;
-  gap: 6px;
-  width: min(100%, max-content);
+  gap: 4px;
+  width: 100%;
   margin-left: auto;
   align-self: flex-start;
 }
@@ -1711,6 +1737,42 @@ img {
   padding-right: 8px;
   padding-left: 8px;
   text-align: center;
+}
+
+.advance-history-layout {
+  display: block !important;
+}
+
+.advance-history-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.advance-history-summary {
+  min-width: 0;
+}
+
+.payment-history-modal .toolbar.advance-history-actions {
+  display: grid;
+  grid-template-columns: auto 44px;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  margin: 0;
+}
+
+.advance-history-actions .btn.icon-only {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+}
+
+.advance-history-empty {
+  margin-top: 8px;
 }
 
 .payment-group-members {
@@ -3318,12 +3380,8 @@ body.is-scrolling-content .bottom-nav {
     font-size: 0.64rem;
   }
 
-  .payment-group-header {
-    grid-template-columns: 1fr;
-  }
-
   .payment-group-actions {
-    grid-template-columns: minmax(54px, 68px) repeat(5, minmax(34px, 40px));
+    grid-template-columns: minmax(44px, 1.35fr) repeat(5, minmax(34px, 1fr));
     justify-content: end;
     width: 100%;
   }
@@ -3370,26 +3428,26 @@ body.is-scrolling-content .bottom-nav {
   }
 
   .player-balance-row .row-main {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: start;
   }
 
   .player-balance-actions {
-    grid-template-columns: 54px repeat(3, 40px);
+    grid-template-columns: minmax(44px, 1.35fr) repeat(3, minmax(34px, 1fr));
     gap: 6px;
     justify-self: end;
   }
 
   .player-balance-actions .btn.icon-only {
-    width: 40px;
-    min-width: 40px;
-    height: 40px;
-    min-height: 40px;
-    flex: 0 0 40px;
+    width: 100%;
+    min-width: 0;
+    height: auto;
+    min-height: 0;
+    aspect-ratio: 1;
   }
 
   .player-balance-actions .input {
-    min-height: 40px;
+    min-height: 34px;
     padding-right: 8px;
     padding-left: 8px;
   }
@@ -3432,6 +3490,21 @@ body.is-scrolling-content .bottom-nav {
   .meta-grid.advance-meta-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 5px;
+  }
+}
+
+@media (max-width: 374px) {
+  .payment-group-header {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "title"
+      "actions"
+      "details";
+  }
+
+  .payment-group-actions {
+    width: min(100%, 314px);
+    justify-self: end;
   }
 }
 

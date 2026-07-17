@@ -191,7 +191,7 @@ function renderLogin() {
 function renderHeader() {
   return `
     <header class="app-header">
-      <a class="brand brand-link" href="#dashboard" data-view="dashboard" aria-label="Open dashboard">
+      <a class="brand brand-link" href="#dashboard" data-view="dashboard" data-dashboard-logo="true" aria-label="Open dashboard">
         <img class="brand-logo" src="assets/ad-smashers-logo.png" alt="AD Smashers logo" />
         <div class="brand-text">
           <p class="brand-title">AD Smashers</p>
@@ -206,7 +206,7 @@ function renderHeader() {
 function renderSidebar() {
   return `
     <aside class="sidebar" aria-label="Primary">
-      <a class="brand brand-link sidebar-brand" href="#dashboard" data-view="dashboard" aria-label="Open dashboard">
+      <a class="brand brand-link sidebar-brand" href="#dashboard" data-view="dashboard" data-dashboard-logo="true" aria-label="Open dashboard">
         <img class="brand-logo" src="assets/ad-smashers-logo.png" alt="AD Smashers logo" />
         <div class="brand-text">
           <p class="brand-title">AD Smashers</p>

@@ -1,4 +1,5 @@
 let voteDragState = null;
+let viewNavigationPending = false;
 
 function setSessionField(sessionId, fieldName, value) {
   const session = getSession(sessionId);
@@ -140,6 +141,48 @@ function handlePointerUp(event) {
   render();
 }
 
+function navigateToView(nextView, nextSessionId = "") {
+  const sameSurface = nextView === activeView && (!nextSessionId || nextSessionId === activeSessionId);
+  if (sameSurface) return false;
+  const isPageSwitch = nextView !== activeView;
+  if (isPageSwitch) {
+    uiState.scrollPositions = uiState.scrollPositions || {};
+    uiState.scrollPositions[surfaceKey(nextView)] = 0;
+  }
+  activeView = nextView;
+  if (nextSessionId) {
+    activeSessionId = nextSessionId;
+    const selectedSession = getSession(activeSessionId);
+    if (selectedSession?.date) uiState.sessionWeekStart = weekStartIso(selectedSession.date);
+    activeSessionTab = DEFAULT_SESSION_TAB;
+  }
+  render();
+  return true;
+}
+
+function afterVisiblePaint(callback) {
+  const requestFrame = typeof window.requestAnimationFrame === "function"
+    ? window.requestAnimationFrame.bind(window)
+    : (next) => window.setTimeout(next, 16);
+  requestFrame(() => requestFrame(callback));
+}
+
+function navigateToDashboardWithLoading(nextSessionId = "") {
+  const sameSurface = activeView === "dashboard" && (!nextSessionId || nextSessionId === activeSessionId);
+  if (sameSurface || viewNavigationPending) return false;
+  viewNavigationPending = true;
+  setAppLoadingOverlay(true, "Opening Dashboard...");
+  afterVisiblePaint(() => {
+    try {
+      navigateToView("dashboard", nextSessionId);
+    } finally {
+      viewNavigationPending = false;
+      setAppLoadingOverlay(false);
+    }
+  });
+  return true;
+}
+
 function handleClick(event) {
   if (event.target.matches("[data-modal-backdrop]")) {
     return;
@@ -150,21 +193,11 @@ function handleClick(event) {
     event.preventDefault();
     const nextView = viewButton.dataset.view;
     const nextSessionId = viewButton.dataset.session || "";
-    const sameSurface = nextView === activeView && (!nextSessionId || nextSessionId === activeSessionId);
-    if (sameSurface) return;
-    const isPageSwitch = nextView !== activeView;
-    if (isPageSwitch) {
-      uiState.scrollPositions = uiState.scrollPositions || {};
-      uiState.scrollPositions[surfaceKey(nextView)] = 0;
+    if (viewButton.dataset.dashboardLogo === "true") {
+      navigateToDashboardWithLoading(nextSessionId);
+      return;
     }
-    activeView = nextView;
-    if (nextSessionId) {
-      activeSessionId = nextSessionId;
-      const selectedSession = getSession(activeSessionId);
-      if (selectedSession?.date) uiState.sessionWeekStart = weekStartIso(selectedSession.date);
-      activeSessionTab = DEFAULT_SESSION_TAB;
-    }
-    render();
+    navigateToView(nextView, nextSessionId);
     return;
   }
 
