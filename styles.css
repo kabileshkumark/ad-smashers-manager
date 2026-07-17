@@ -1673,9 +1673,10 @@ img {
 
 .payment-group-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(236px, 314px);
+  grid-template-columns: minmax(0, 1fr) clamp(180px, 25vw, 236px);
   grid-template-areas:
     "title actions"
+    "payment payment"
     "details details";
   align-items: flex-start;
   gap: 8px;
@@ -1688,11 +1689,28 @@ img {
 
 .payment-group-title-line {
   grid-area: title;
+  display: block;
+  align-self: center;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.payment-group-payment-line {
+  grid-area: payment;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  justify-content: space-between;
   gap: 8px;
   min-width: 0;
+}
+
+.payment-group-payment-line .badge {
+  max-width: calc(100% - 92px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .payment-group-details {
@@ -1703,13 +1721,17 @@ img {
 }
 
 .payment-group-title-line .row-title {
+  display: block;
   margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .payment-group-actions {
   grid-area: actions;
   display: grid;
-  grid-template-columns: minmax(44px, 1.35fr) repeat(5, minmax(34px, 1fr));
+  grid-template-columns: repeat(5, minmax(32px, 1fr));
   align-items: stretch;
   justify-content: end;
   gap: 4px;
@@ -1720,6 +1742,12 @@ img {
 
 .payment-group-actions .compact-field {
   width: auto;
+  min-width: 0;
+}
+
+.payment-group-amount-field {
+  flex: 0 0 84px;
+  width: 84px;
   min-width: 0;
 }
 
@@ -1737,6 +1765,18 @@ img {
   padding-right: 8px;
   padding-left: 8px;
   text-align: center;
+}
+
+.payment-group-amount-field .input {
+  height: 38px;
+  min-height: 38px;
+  padding: 6px 8px;
+  text-align: center;
+}
+
+.payment-group-amount-field .input::placeholder {
+  color: var(--ink-500);
+  opacity: 0.48;
 }
 
 .advance-history-layout {
@@ -1898,6 +1938,33 @@ img {
 .session-card-title-line .stage-badges {
   align-items: center;
   flex: 0 1 auto;
+}
+
+.session-court-breakdown {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 8px;
+  min-width: 0;
+}
+
+.session-court-breakdown-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  padding-left: 12px;
+  border-left: 2px solid var(--teal-700);
+  color: var(--ink-500);
+  font-size: 0.76rem;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.session-court-breakdown-item strong {
+  color: var(--ink-900);
+  font-size: inherit;
 }
 
 .session-card-actions {
@@ -2625,6 +2692,95 @@ body.is-scrolling-content .bottom-nav {
 
 .session-form-row.two {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.session-court-slots {
+  display: grid;
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.session-court-slots-heading,
+.session-court-slot-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.session-court-slots-heading h3,
+.session-court-slots-heading p {
+  margin: 0;
+}
+
+.session-court-slots-heading h3 {
+  font-size: 1rem;
+}
+
+.session-court-slots-heading p,
+.session-court-slot-summary {
+  color: var(--ink-500);
+  font-size: 0.78rem;
+}
+
+.session-court-slot-list {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.session-court-slot {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.session-court-slot:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.session-court-slot-heading {
+  align-items: center;
+}
+
+.session-court-slot-heading strong {
+  font-size: 0.84rem;
+}
+
+.session-court-slot-heading .btn.icon-only,
+.session-court-slots-heading .btn.icon-only {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+}
+
+.session-court-slot-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(72px, 0.72fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.session-court-slot-summary {
+  margin: 0;
+  font-weight: 700;
+}
+
+@media (max-width: 640px) {
+  .session-court-slot-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .session-court-slot-fields .field:last-child {
+    grid-column: 1 / -1;
+  }
 }
 
 .weekly-player-form {
@@ -3381,7 +3537,7 @@ body.is-scrolling-content .bottom-nav {
   }
 
   .payment-group-actions {
-    grid-template-columns: minmax(44px, 1.35fr) repeat(5, minmax(34px, 1fr));
+    grid-template-columns: repeat(5, minmax(32px, 1fr));
     justify-content: end;
     width: 100%;
   }
@@ -3495,17 +3651,14 @@ body.is-scrolling-content .bottom-nav {
 
 @media (max-width: 374px) {
   .payment-group-header {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas:
-      "title"
-      "actions"
-      "details";
+    grid-template-columns: minmax(0, 1fr) minmax(164px, 184px);
   }
 
   .payment-group-actions {
-    width: min(100%, 314px);
+    width: 100%;
     justify-self: end;
   }
+
 }
 
 @media (min-width: 390px) and (max-width: 430px) {

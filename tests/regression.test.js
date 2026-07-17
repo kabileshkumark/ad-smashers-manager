@@ -849,7 +849,7 @@ test("player payment copy includes full history and due reminder options", () =>
   const groupAmountInput = groupCardHtml.match(/<input[^>]*name="amountPaid"[^>]*>/)?.[0] || "";
   assert.ok(groupAmountInput);
   assert.doesNotMatch(groupAmountInput, /\svalue=/);
-  assert.doesNotMatch(groupAmountInput, /placeholder="0"/);
+  assert.match(groupAmountInput, /placeholder="0"/);
 
   const groupModalHtml = run(context, 'renderPaymentGroupCopyModal("copy-group")');
   assert.match(groupModalHtml, /Copy Full History/);
@@ -883,8 +883,11 @@ test("new session modal defaults from date and selects booking court", () => {
   assert.ok(html.indexOf(">Date<") < html.indexOf(">Session Type<"));
   assert.match(html, /type="date"[^>]*value="2026-07-10"[^>]*data-session-date-source/);
   assert.match(html, /<option value="Friday" selected>Friday<\/option>/);
-  assert.match(html, /name="startTime"[^>]*value="19:00"/);
-  assert.match(html, /name="endTime"[^>]*value="21:00"/);
+  assert.match(html, /name="slotStartTime"[^>]*value="19:00"/);
+  assert.match(html, /name="slotEndTime"[^>]*value="21:00"/);
+  assert.match(html, /name="slotCourts"[^>]*value="2"/);
+  assert.match(html, /name="expectedPlayers"[^>]*value="12"[^>]*readonly/);
+  assert.match(html, /4 court-hours; 2 courts set capacity/);
   assert.match(html, /<option value="court-booking" selected>Booking<\/option>/);
   assert.match(html, /name="shuttleCost"[^>]*value="0"[^>]*data-session-rate-source/);
   assert.match(html, /name="waterCost"[^>]*value="6"[^>]*data-water-cost-input/);
@@ -899,6 +902,32 @@ test("existing session modal keeps water cost at zero when not saved", () => {
   assert.match(html, /name="waterCost"[^>]*value="0"[^>]*data-water-cost-input/);
 });
 
+test("existing session modal preserves explicit fee and rate overrides", () => {
+  const context = createAppContext();
+  const slots = [
+    { startTime: "20:00", endTime: "21:00", courts: 3 },
+    { startTime: "21:00", endTime: "22:00", courts: 2 }
+  ];
+  setAppState(
+    context,
+    baseFixture({
+      courts: [court("court-1", "Test Court", "Test Area", 50)],
+      sessions: [baseSession({ id: "manual-fee-session", courtSlots: slots, courtId: "court-1", totalPaid: 240, perPersonAmount: 20 })]
+    })
+  );
+
+  const manualHtml = run(context, 'renderSessionModal("manual-fee-session")');
+  assert.match(manualHtml, /name="totalPaid"[^>]*value="240"[^>]*data-court-fee-input[^>]*data-manual="true"/);
+  assert.match(manualHtml, /name="perPersonAmount"[^>]*value="20"[^>]*data-per-person-input[^>]*data-manual="true"/);
+
+  run(context, "state.sessions[0].totalPaid = 250; state.sessions[0].perPersonAmount = 14");
+  const calculatedHtml = run(context, 'renderSessionModal("manual-fee-session")');
+  const courtFeeInput = calculatedHtml.match(/<input[^>]*name="totalPaid"[^>]*>/)?.[0] || "";
+  const perPersonInput = calculatedHtml.match(/<input[^>]*name="perPersonAmount"[^>]*>/)?.[0] || "";
+  assert.doesNotMatch(courtFeeInput, /data-manual="true"/);
+  assert.doesNotMatch(perPersonInput, /data-manual="true"/);
+});
+
 test("water cost formula groups every two courts", () => {
   const context = createAppContext();
 
@@ -908,6 +937,107 @@ test("water cost formula groups every two courts", () => {
   assert.equal(run(context, "calculateWaterCost(3)"), 12);
   assert.equal(run(context, "calculateWaterCost(4)"), 12);
   assert.equal(run(context, "calculateWaterCost(5)"), 18);
+});
+
+test("variable court slots derive total court-hours fee and highest-count capacity", () => {
+  const context = createAppContext();
+  const slots = [
+    { startTime: "20:00", endTime: "21:00", courts: 3 },
+    { startTime: "21:00", endTime: "22:00", courts: 2 }
+  ];
+  setAppState(
+    context,
+    baseFixture({
+      courts: [court("court-1", "Test Court", "Test Area", 50)],
+      sessions: [baseSession({ id: "variable-courts", courtSlots: slots, expectedPlayers: 6, totalPaid: 250 })]
+    })
+  );
+
+  assert.deepEqual(jsonValue(context, "state.sessions[0].courtSlots"), slots);
+  assert.equal(run(context, "state.sessions[0].startTime"), "20:00");
+  assert.equal(run(context, "state.sessions[0].endTime"), "22:00");
+  assert.equal(run(context, "state.sessions[0].bookedCourts"), 3);
+  assert.equal(run(context, "state.sessions[0].expectedPlayers"), 18);
+  assert.equal(run(context, "sessionCourtHours(state.sessions[0])"), 5);
+  assert.equal(run(context, "calculateCourtFeeForSlots('court-1', state.sessions[0].courtSlots)"), 250);
+  assert.equal(run(context, "allocateSession(state.sessions[0]).capacity"), 18);
+  assert.equal(run(context, "sessionCourtCountLabel(state.sessions[0])"), "3 → 2");
+  assert.deepEqual(jsonValue(context, "jsonFromFirestoreValue(firestoreValueFromJson(state.sessions[0].courtSlots))"), slots);
+
+  const card = run(context, "renderSessionCard(state.sessions[0])");
+  assert.match(card, /<span>Courts<\/span><strong>3 → 2<\/strong>/);
+  assert.match(card, /8:00 to 9:00 PM/);
+  assert.match(card, /9:00 to 10:00 PM/);
+  assert.match(card, />3 courts</);
+  assert.match(card, />2 courts</);
+  assert.equal(run(context, "templateData(state.sessions[0]).planned_courts"), "3 → 2");
+  assert.match(run(context, "buildBookingRequest(state.courts[0])"), /Total court-hours: 5/);
+  assert.equal(
+    run(context, "dashboardCourtSpend([{ court: state.courts[0], courtFee: 250, session: state.sessions[0] }])[0].detail"),
+    "1 sessions, 5 court-hours"
+  );
+});
+
+test("court slot validation rejects overlaps and supports overnight sequences", () => {
+  const context = createAppContext();
+
+  assert.equal(run(context, `validateCourtSlots([{ startTime: "20:00", endTime: "20:00", courts: 2 }]).valid`), false);
+  assert.equal(
+    run(context, `validateCourtSlots([
+      { startTime: "20:00", endTime: "21:00", courts: 3 },
+      { startTime: "20:30", endTime: "22:00", courts: 2 }
+    ]).valid`),
+    false
+  );
+  assert.match(
+    run(context, `validateCourtSlots([
+      { startTime: "20:00", endTime: "21:00", courts: 3 },
+      { startTime: "20:30", endTime: "22:00", courts: 2 }
+    ]).message`),
+    /overlaps/
+  );
+  assert.equal(
+    run(context, `courtSlotCourtHours([
+      { startTime: "23:00", endTime: "00:00", courts: 2 },
+      { startTime: "00:00", endTime: "01:00", courts: 1 }
+    ])`),
+    3
+  );
+});
+
+test("legacy single-allocation sessions keep their stored capacity until edited", () => {
+  const context = createAppContext();
+  setAppState(context, baseFixture({ sessions: [baseSession({ expectedPlayers: 4, bookedCourts: 2, plannedCourts: 2 })] }));
+
+  assert.equal(run(context, "Object.hasOwn(state.sessions[0], 'courtSlots')"), false);
+  assert.deepEqual(jsonValue(context, "sessionCourtSlots(state.sessions[0])"), [
+    { startTime: "19:00", endTime: "21:00", courts: 2 }
+  ]);
+  assert.equal(run(context, "allocateSession(state.sessions[0]).capacity"), 4);
+});
+
+test("court slot changes are part of the protected session financial basis", () => {
+  const context = createAppContext();
+  context.__current = baseSession({
+    courtSlots: [{ startTime: "20:00", endTime: "22:00", courts: 2 }],
+    startTime: "20:00",
+    endTime: "22:00",
+    bookedCourts: 2,
+    plannedCourts: 2
+  });
+  context.__same = { ...context.__current, courtSlots: [{ startTime: "20:00", endTime: "22:00", courts: 2 }] };
+  context.__changed = {
+    ...context.__current,
+    courtSlots: [
+      { startTime: "20:00", endTime: "21:00", courts: 3 },
+      { startTime: "21:00", endTime: "22:00", courts: 2 }
+    ],
+    bookedCourts: 3,
+    plannedCourts: 3
+  };
+
+  assert.equal(run(context, "sessionFinancialBasisChanged(__current, __same)"), false);
+  assert.equal(run(context, "sessionFinancialBasisChanged(__current, __changed)"), true);
 });
 
 test("session date defaults choose friday saturday and flexiday timings", () => {
@@ -3683,16 +3813,16 @@ test("shared icon action buttons keep square dimensions", () => {
   assertSquare(paymentStatusButton, 40);
   assert.match(paymentStatusButton, /flex:\s*0 0 40px/);
   assertSquare(block(/\.player-card-actions \.btn\.icon-only\s*\{[^}]+\}/), 44);
-  assert.match(paymentGroupHeader, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(236px,\s*314px\)/);
-  assert.match(paymentGroupHeader, /"title actions"[\s\S]*"details details"/);
+  assert.match(paymentGroupHeader, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*clamp\(180px,\s*25vw,\s*236px\)/);
+  assert.match(paymentGroupHeader, /"title actions"[\s\S]*"payment payment"[\s\S]*"details details"/);
   assert.match(paymentGroupActions, /grid-area:\s*actions/);
-  assert.match(paymentGroupActions, /grid-template-columns:\s*minmax\(44px,\s*1\.35fr\)\s*repeat\(5,\s*minmax\(34px,\s*1fr\)\)/);
+  assert.match(paymentGroupActions, /grid-template-columns:\s*repeat\(5,\s*minmax\(32px,\s*1fr\)\)/);
   assert.match(paymentGroupActionButton, /width:\s*100%/);
   assert.match(paymentGroupActionButton, /height:\s*auto/);
   assert.match(paymentGroupActionButton, /min-width:\s*0/);
   assert.match(paymentGroupActionButton, /min-height:\s*0/);
   assert.match(paymentGroupActionButton, /aspect-ratio:\s*1/);
-  assert.match(mobilePaymentGroupActions, /grid-template-columns:\s*minmax\(44px,\s*1\.35fr\)\s*repeat\(5,\s*minmax\(34px,\s*1fr\)\)/);
+  assert.match(mobilePaymentGroupActions, /grid-template-columns:\s*repeat\(5,\s*minmax\(32px,\s*1fr\)\)/);
   assert.match(mobilePaymentGroupActionButton, /width:\s*100%/);
   assert.match(mobilePaymentGroupActionButton, /height:\s*auto/);
   assert.match(mobilePaymentGroupActionButton, /aspect-ratio:\s*1/);

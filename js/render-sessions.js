@@ -57,7 +57,8 @@ function renderSessionCard(session, selectable = false) {
   const stats = sessionStats(session);
   const court = getCourt(session.courtId);
   const group = getSessionGroup(session);
-  const courtCount = Number(session.bookedCourts || session.plannedCourts || 0);
+  const courtSlots = sessionCourtSlots(session);
+  const courtCount = sessionCourtCountLabel(session);
   const groupUrl = safeWhatsappGroupUrl(group?.url || "");
   const whatsappGroupAction = groupUrl
     ? `<button class="btn icon-only" type="button" data-action="open-group" data-session="${escapeAttr(session.id)}" aria-label="Open WhatsApp Business group for ${escapeAttr(formatDate(session.date))}" title="Open WhatsApp Business group">${icon("message")}</button>`
@@ -71,6 +72,7 @@ function renderSessionCard(session, selectable = false) {
             ${renderSessionStageChips(session)}
           </div>
           <p class="row-subtitle">${escapeHtml(timeRange(session))} at ${escapeHtml(court?.name || "Court not selected")}</p>
+          ${courtSlots.length > 1 ? renderSessionCourtSlotBreakdown(courtSlots) : ""}
         </div>
       </div>
       <div class="meta-grid session-card-metrics">
@@ -91,6 +93,23 @@ function renderSessionCard(session, selectable = false) {
         <button class="btn icon-only danger" type="button" data-action="delete-session" data-session="${escapeAttr(session.id)}" aria-label="Delete ${escapeAttr(session.type)} Session" title="Delete">${icon("trash")}</button>
       </div>
     </article>
+  `;
+}
+
+function renderSessionCourtSlotBreakdown(slots) {
+  return `
+    <div class="session-court-breakdown" aria-label="Court allocation by time">
+      ${slots
+        .map(
+          (slot) => `
+            <span class="session-court-breakdown-item">
+              <strong>${escapeHtml(messageTimeRange(slot, true))}</strong>
+              <span>${escapeHtml(`${slot.courts} ${slot.courts === 1 ? "court" : "courts"}`)}</span>
+            </span>
+          `
+        )
+        .join("")}
+    </div>
   `;
 }
 
@@ -139,6 +158,7 @@ function renderOverviewTab(session) {
   const court = getCourt(session.courtId);
   const group = getSessionGroup(session);
   const stats = sessionStats(session);
+  const courtSlots = sessionCourtSlots(session);
   return `
     <div class="detail-content">
       <section class="panel">
@@ -148,16 +168,17 @@ function renderOverviewTab(session) {
             <p>Select court, time, and weekly capacity</p>
           </div>
         </div>
-        <div class="form-grid two">
-          ${field("date", "Date", "date", session.date)}
-          ${timeSelectField("startTime", "Start Time", session.startTime)}
-          ${timeSelectField("endTime", "End Time", session.endTime)}
-          ${selectField("courtId", "Court", orderedCourtOptions(), session.courtId, "name")}
-          ${numberField("plannedCourts", "Planned Courts", session.plannedCourts, 1)}
-          ${numberField("bookedCourts", "Booked Courts", session.bookedCourts, 0)}
-          ${numberField("playersPerCourt", "Players per Court", getPlayersPerCourt(session), 1)}
-          ${numberField("expectedPlayers", "Expected Players", expectedPlayersValue(session.expectedPlayers, session.bookedCourts, getPlayersPerCourt(session)), 0)}
-          ${selectSimple("bookingStatus", "Booking Status", ["Planned", "Pre-booked", "Booked", "Pending"], session.bookingStatus)}
+        <div class="meta-grid">
+          <div class="meta"><span>Date</span><strong>${escapeHtml(formatDate(session.date))}</strong></div>
+          <div class="meta"><span>Court</span><strong>${escapeHtml(court?.name || "Not Set")}</strong></div>
+          <div class="meta"><span>Time</span><strong>${escapeHtml(timeRange(session))}</strong></div>
+          <div class="meta"><span>Courts</span><strong>${escapeHtml(sessionCourtCountLabel(session))}</strong></div>
+          <div class="meta"><span>Capacity</span><strong>${escapeHtml(stats.capacity)}</strong></div>
+          <div class="meta"><span>Court-hours</span><strong>${escapeHtml(Number(sessionCourtHours(session).toFixed(2)))}</strong></div>
+        </div>
+        ${courtSlots.length > 1 ? renderSessionCourtSlotBreakdown(courtSlots) : ""}
+        <div class="toolbar">
+          <button class="btn" type="button" data-action="edit-session" data-session="${escapeAttr(session.id)}">Edit Session Setup</button>
         </div>
         <label class="field">
           <span>Notes</span>
@@ -330,7 +351,7 @@ function renderCourtAllocationTab(session) {
             <h2>Court Allocation</h2>
             <p>Skill-grouped courts, waitlist kept by join order</p>
           </div>
-          <button class="btn" type="button" data-action="add-court" data-session="${escapeAttr(session.id)}">Add Court</button>
+          <button class="btn" type="button" data-action="edit-session" data-session="${escapeAttr(session.id)}">Edit Court Slots</button>
         </div>
         <div class="allocation">
           ${allocation.courts.map((court) => renderCourtSection(court, playersPerCourt)).join("")}

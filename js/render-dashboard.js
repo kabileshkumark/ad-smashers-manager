@@ -414,7 +414,7 @@ function dashboardCourtSpend(summaries) {
     };
     item.amount += summary.courtFee;
     item.sessions += 1;
-    item.hours += sessionDurationHours(summary.session.startTime, summary.session.endTime);
+    item.hours += sessionCourtHours(summary.session);
     byCourt.set(key, item);
   });
   return [...byCourt.values()]
@@ -423,7 +423,7 @@ function dashboardCourtSpend(summaries) {
     .map((item) => ({
       ...item,
       value: currency(item.amount),
-      detail: `${item.sessions} sessions, ${Number(item.hours.toFixed(1))} hours`
+      detail: `${item.sessions} sessions, ${Number(item.hours.toFixed(1))} court-hours`
     }));
 }
 

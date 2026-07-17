@@ -198,8 +198,14 @@ function normalizeTextMap(value = {}) {
 function normalizeSession(session, settings = state?.settings || {}) {
   const playersPerCourt = Number(session.playersPerCourt || settings.defaultPlayersPerCourt || PLAYERS_PER_COURT);
   const type = sessionTypeForDate(session.date, session.type);
-  const fallbackExpectedPlayers = calculateExpectedPlayers(session.bookedCourts, playersPerCourt);
-  const expectedPlayers = storedNumberOrFallback(session.expectedPlayers, fallbackExpectedPlayers);
+  const hasCourtSlots = Array.isArray(session.courtSlots) && session.courtSlots.length > 0;
+  const courtSlots = hasCourtSlots ? sessionCourtSlots(session) : [];
+  const bookedCourts = hasCourtSlots ? courtSlotMaxCourts(courtSlots) : Number(session.bookedCourts || session.plannedCourts || 0);
+  const plannedCourts = hasCourtSlots ? bookedCourts : Number(session.plannedCourts ?? bookedCourts);
+  const startTime = hasCourtSlots ? courtSlots[0].startTime : session.startTime;
+  const endTime = hasCourtSlots ? courtSlots[courtSlots.length - 1].endTime : session.endTime;
+  const fallbackExpectedPlayers = calculateExpectedPlayers(bookedCourts, playersPerCourt);
+  const expectedPlayers = hasCourtSlots ? fallbackExpectedPlayers : storedNumberOrFallback(session.expectedPlayers, fallbackExpectedPlayers);
   const waterCost = storedNumberOrFallback(session.waterCost, 0);
   const fallbackPerPersonAmount = calculatePerPersonRate(
     session.totalPaid,
@@ -209,6 +215,10 @@ function normalizeSession(session, settings = state?.settings || {}) {
   const normalized = {
     ...session,
     type,
+    startTime,
+    endTime,
+    plannedCourts,
+    bookedCourts,
     groupId: sessionGroupIdFor({ ...session, type }),
     stage: normalizeSessionStage(session),
     playersPerCourt,
@@ -235,6 +245,7 @@ function normalizeSession(session, settings = state?.settings || {}) {
     guestNames: normalizeTextMap(session.guestNames),
     sent: session.sent || {}
   };
+  if (hasCourtSlots) normalized.courtSlots = courtSlots;
   if (Array.isArray(session.attendedPlayerIds)) {
     normalized.attendedPlayerIds = uniqueIds(session.attendedPlayerIds);
   }

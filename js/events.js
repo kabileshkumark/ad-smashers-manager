@@ -27,15 +27,15 @@ function setSessionField(sessionId, fieldName, value) {
 }
 
 function updateSessionModalCalculations(form) {
-  if (form?.dataset.editId) return;
   const fields = form?.elements;
   if (!fields) return;
-  const courts = fields.courts?.value;
+  const courtSlots = sessionCourtSlotsFromForm(form);
+  const courts = courtSlotMaxCourts(courtSlots);
   const playersPerCourt = state.settings.defaultPlayersPerCourt || PLAYERS_PER_COURT;
   const shuttleCost = Number(fields.shuttleCost?.value ?? state.settings.defaultShuttleCost ?? 5);
   const waterCostInput = fields.waterCost;
   const expectedPlayersInput = fields.expectedPlayers;
-  if (expectedPlayersInput && expectedPlayersInput.dataset.manual !== "true") {
+  if (expectedPlayersInput) {
     expectedPlayersInput.value = calculateExpectedPlayers(courts, playersPerCourt);
   }
   if (waterCostInput && waterCostInput.dataset.manual !== "true") {
@@ -43,12 +43,52 @@ function updateSessionModalCalculations(form) {
   }
   const courtFeeInput = form?.querySelector("[data-court-fee-input]");
   if (courtFeeInput && courtFeeInput.dataset.manual !== "true") {
-    courtFeeInput.value = calculateCourtFee(fields.courtId?.value, fields.startTime?.value, fields.endTime?.value, courts);
+    courtFeeInput.value = calculateCourtFeeForSlots(fields.courtId?.value, courtSlots);
   }
   const perPersonInput = fields.perPersonAmount;
   if (perPersonInput && perPersonInput.dataset.manual !== "true") {
     perPersonInput.value = calculatePerPersonRate(fields.totalPaid?.value, fields.expectedPlayers?.value, shuttleCost);
   }
+  const summary = form?.querySelector("[data-session-court-slot-summary]");
+  if (summary) {
+    summary.textContent = `${Number(courtSlotCourtHours(courtSlots).toFixed(2))} court-hours; ${courts} courts set capacity`;
+  }
+}
+
+function sessionCourtSlotsFromForm(form) {
+  const rows = form?.querySelectorAll ? [...form.querySelectorAll("[data-session-court-slot]")] : [];
+  if (rows.length) {
+    return rows.map((row) => ({
+      startTime: row.querySelector('[name="slotStartTime"]')?.value || "00:00",
+      endTime: row.querySelector('[name="slotEndTime"]')?.value || "01:00",
+      courts: row.querySelector('[name="slotCourts"]')?.value || 1
+    }));
+  }
+  const fields = form?.elements || {};
+  return normalizeCourtSlots([], {
+    startTime: fields.startTime?.value || "00:00",
+    endTime: fields.endTime?.value || "01:00",
+    courts: fields.courts?.value || 1
+  });
+}
+
+function clockTimeAfter(value, minutesToAdd) {
+  const start = courtSlotClockMinutes(value);
+  const total = (start + Math.max(30, Number(minutesToAdd || 60))) % (24 * 60);
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function refreshSessionCourtSlotControls(form) {
+  const rows = form?.querySelectorAll ? [...form.querySelectorAll("[data-session-court-slot]")] : [];
+  rows.forEach((row, index) => {
+    const heading = row.querySelector(".session-court-slot-heading strong");
+    const removeButton = row.querySelector('[data-action="remove-session-court-slot"]');
+    if (heading) heading.textContent = `Time Slot ${index + 1}`;
+    if (removeButton) {
+      removeButton.disabled = rows.length <= 1;
+      removeButton.setAttribute("aria-label", `Remove time slot ${index + 1}`);
+    }
+  });
 }
 
 function applySessionDateDefaults(form) {
@@ -58,8 +98,16 @@ function applySessionDateDefaults(form) {
   const type = sessionTypeForDate(fields.date.value, fields.type?.value || "Friday");
   if (fields.type) fields.type.value = type;
   const defaults = sessionDefaultTimesForType(type);
-  if (fields.startTime) fields.startTime.value = defaults.startTime;
-  if (fields.endTime) fields.endTime.value = defaults.endTime;
+  const slotRows = form.querySelectorAll ? [...form.querySelectorAll("[data-session-court-slot]")] : [];
+  if (slotRows.length === 1) {
+    const startInput = slotRows[0].querySelector('[name="slotStartTime"]');
+    const endInput = slotRows[0].querySelector('[name="slotEndTime"]');
+    if (startInput) startInput.value = defaults.startTime;
+    if (endInput) endInput.value = defaults.endTime;
+  } else {
+    if (fields.startTime) fields.startTime.value = defaults.startTime;
+    if (fields.endTime) fields.endTime.value = defaults.endTime;
+  }
   updateSessionModalCalculations(form);
 }
 
@@ -294,6 +342,36 @@ function handleClick(event) {
       showToast("Could not delete.");
       render();
     }
+    return;
+  }
+
+  if (action === "add-session-court-slot") {
+    const form = actionTarget.closest('form[data-form="session"]');
+    const list = form?.querySelector("[data-session-court-slot-list]");
+    if (!form || !list) return;
+    const slots = sessionCourtSlotsFromForm(form);
+    const lastSlot = slots[slots.length - 1] || { startTime: "20:00", endTime: "21:00", courts: 1 };
+    const durationMinutes = Math.max(30, sessionDurationHours(lastSlot.startTime, lastSlot.endTime) * 60 || 60);
+    const nextSlot = {
+      startTime: lastSlot.endTime,
+      endTime: clockTimeAfter(lastSlot.endTime, durationMinutes),
+      courts: lastSlot.courts
+    };
+    list.insertAdjacentHTML("beforeend", renderSessionCourtSlot(nextSlot, slots.length, slots.length + 1));
+    refreshSessionCourtSlotControls(form);
+    updateSessionModalCalculations(form);
+    list.lastElementChild?.querySelector('[name="slotCourts"]')?.focus();
+    return;
+  }
+
+  if (action === "remove-session-court-slot") {
+    const form = actionTarget.closest('form[data-form="session"]');
+    const row = actionTarget.closest("[data-session-court-slot]");
+    const rows = form?.querySelectorAll ? form.querySelectorAll("[data-session-court-slot]") : [];
+    if (!form || !row || rows.length <= 1) return;
+    row.remove();
+    refreshSessionCourtSlotControls(form);
+    updateSessionModalCalculations(form);
     return;
   }
 
@@ -766,12 +844,6 @@ function handleClick(event) {
     saveState();
     showToast("Marked as sent.");
   }
-  if (action === "add-court" && session) {
-    session.bookedCourts = Number(session.bookedCourts || session.plannedCourts || 0) + 1;
-    session.plannedCourts = Math.max(Number(session.plannedCourts || 0), session.bookedCourts);
-    applyBookingStage(session, true);
-    saveState();
-  }
   if (action === "delete-response" && session) {
     const response = session.responses.find((item) => item.id === actionTarget.dataset.response);
     const playerName = response ? getPlayerName(response.playerId) : "this player";
@@ -1026,16 +1098,22 @@ async function handleSubmit(event) {
     const groupId = sessionGroupIdFor({ date: data.date, type });
     const existingSession = editId ? getSession(editId) : null;
     const defaultTimes = sessionDefaultTimesForDate(data.date, type);
-    const startTime = normalizeHalfHourTime(data.startTime, defaultTimes.startTime);
-    const endTime = normalizeHalfHourTime(data.endTime, defaultTimes.endTime);
-    const courts = Math.max(1, Number(data.courts || 2));
+    const slotValidation = validateCourtSlots(sessionCourtSlotsFromForm(form));
+    if (!slotValidation.valid) {
+      showToast(slotValidation.message);
+      return;
+    }
+    const courtSlots = slotValidation.slots;
+    const startTime = normalizeHalfHourTime(courtSlots[0]?.startTime, defaultTimes.startTime);
+    const endTime = normalizeHalfHourTime(courtSlots[courtSlots.length - 1]?.endTime, defaultTimes.endTime);
+    const courts = courtSlotMaxCourts(courtSlots);
     const bookedCourts = courts;
     const playersPerCourt = Number(existingSession?.playersPerCourt || state.settings.defaultPlayersPerCourt || PLAYERS_PER_COURT);
-    const expectedPlayers = existingSession ? Number(data.expectedPlayers || 0) : expectedPlayersValue(data.expectedPlayers, bookedCourts, playersPerCourt);
+    const expectedPlayers = calculateExpectedPlayers(bookedCourts, playersPerCourt);
     const totalPaid = existingSession
       ? Number(data.totalPaid || 0)
       : data.totalPaid === ""
-        ? calculateCourtFee(data.courtId, startTime, endTime, bookedCourts)
+        ? calculateCourtFeeForSlots(data.courtId, courtSlots)
         : Number(data.totalPaid || 0);
     const shuttleCost = data.shuttleCost === ""
       ? Number(existingSession?.shuttleCost ?? state.settings.defaultShuttleCost ?? 5)
@@ -1052,6 +1130,7 @@ async function handleSubmit(event) {
       date: data.date,
       startTime,
       endTime,
+      courtSlots,
       groupId,
       courtId: data.courtId,
       plannedCourts: courts,
@@ -1067,17 +1146,7 @@ async function handleSubmit(event) {
     };
     let session = existingSession;
     if (existingSession) {
-      const changedFinancialBasis = [
-        "date",
-        "startTime",
-        "endTime",
-        "courtId",
-        "bookedCourts",
-        "totalPaid",
-        "shuttleCost",
-        "waterCost",
-        "perPersonAmount"
-      ].some((fieldName) => String(existingSession[fieldName] ?? "") !== String(sessionData[fieldName] ?? ""));
+      const changedFinancialBasis = sessionFinancialBasisChanged(existingSession, sessionData);
       if (changedFinancialBasis && sessionHasActiveFinancialState(existingSession)) {
         showToast("Clear active cash, Advance, or Credit coverage before changing this session's financial basis.");
         render();

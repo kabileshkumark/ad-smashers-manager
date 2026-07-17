@@ -29,6 +29,12 @@ function messageTimeRange(session, compact = false) {
   return `${startText} to ${endText}`;
 }
 
+function sessionCourtSlotBreakdownText(session) {
+  return sessionCourtSlots(session)
+    .map((slot) => `${messageTimeRange(slot, true)}: ${slot.courts} ${slot.courts === 1 ? "court" : "courts"}`)
+    .join("; ");
+}
+
 function parseClockTime(value) {
   const [hours = "0", minutes = "0"] = String(value || "00:00").split(":");
   return {
@@ -208,7 +214,7 @@ function templateData(session) {
     date: messageDate(session.date),
     time: messageTimeRange(session),
     compact_time: messageTimeRange(session, true),
-    planned_courts: session.plannedCourts,
+    planned_courts: sessionCourtCountLabel(session),
     booking_status: courtStatusText(session),
     court_name: messageCourtName(court),
     location_link: court?.location || "Location link not set",
@@ -372,8 +378,8 @@ function buildBookingRequest(court) {
     "",
     `Date: ${formatDate(session.date)}`,
     `Time: ${timeRange(session)}`,
-    `Courts needed: ${session.plannedCourts}`,
-    "Duration: 2 hours",
+    `Court allocation: ${sessionCourtSlotBreakdownText(session)}`,
+    `Total court-hours: ${Number(sessionCourtHours(session).toFixed(2))}`,
     "",
     "Please confirm availability and total cost.",
     "",

@@ -743,6 +743,22 @@ function renderSessionStageModal(sessionId = "") {
   `;
 }
 
+function renderSessionCourtSlot(slot, index, slotCount) {
+  return `
+    <div class="session-court-slot" data-session-court-slot>
+      <div class="session-court-slot-heading">
+        <strong>Time Slot ${index + 1}</strong>
+        <button class="btn icon-only danger" type="button" data-action="remove-session-court-slot" aria-label="Remove time slot ${index + 1}" title="Remove time slot" ${slotCount > 1 ? "" : "disabled"}>${icon("trash")}</button>
+      </div>
+      <div class="session-court-slot-fields">
+        ${timeSelectField("slotStartTime", "From", slot.startTime, "modal", "data-session-cost-source")}
+        ${timeSelectField("slotEndTime", "To", slot.endTime, "modal", "data-session-cost-source")}
+        ${numberField("slotCourts", "Courts", slot.courts, 1, "modal", "data-session-cost-source data-session-capacity-source")}
+      </div>
+    </div>
+  `;
+}
+
 function renderSessionModal(sessionId = "") {
   const session = sessionId ? getSession(sessionId) : null;
   const isEdit = Boolean(session);
@@ -765,23 +781,31 @@ function renderSessionModal(sessionId = "") {
   const sessionDate = session?.date || nextWeekdayDate(5);
   const sessionType = sessionTypeForDate(sessionDate, session?.type || "Friday");
   const defaultTimes = sessionDefaultTimesForDate(sessionDate, sessionType);
-  const startTime = normalizeHalfHourTime(session?.startTime, defaultTimes.startTime);
-  const endTime = normalizeHalfHourTime(session?.endTime, defaultTimes.endTime);
   const courtId = session?.courtId || orderedCourtOptions()[0]?.id || "";
-  const courts = Number(session?.bookedCourts || session?.plannedCourts || 2);
+  const courtSlots = sessionCourtSlots(session || {
+    startTime: defaultTimes.startTime,
+    endTime: defaultTimes.endTime,
+    bookedCourts: 2,
+    plannedCourts: 2
+  }).map((slot) => ({
+    ...slot,
+    startTime: normalizeHalfHourTime(slot.startTime, defaultTimes.startTime),
+    endTime: normalizeHalfHourTime(slot.endTime, defaultTimes.endTime)
+  }));
+  const courts = courtSlotMaxCourts(courtSlots);
   const playersPerCourt = Number(session?.playersPerCourt || state.settings.defaultPlayersPerCourt || PLAYERS_PER_COURT);
   const calculatedExpectedPlayers = calculateExpectedPlayers(courts, playersPerCourt);
-  const expectedPlayers = isEdit ? Number(session?.expectedPlayers ?? 0) : expectedPlayersValue(session?.expectedPlayers, courts, playersPerCourt);
-  const expectedPlayersAttrs = `data-expected-players-input${isEdit || expectedPlayers !== calculatedExpectedPlayers ? ' data-manual="true"' : ""}`;
-  const calculatedCourtFee = calculateCourtFee(courtId, startTime, endTime, courts);
+  const expectedPlayers = calculatedExpectedPlayers;
+  const calculatedCourtFee = calculateCourtFeeForSlots(courtId, courtSlots);
   const totalPaid = isEdit ? Number(session?.totalPaid ?? 0) : Number(session?.totalPaid || 0) || calculatedCourtFee;
+  const totalPaidAttrs = `data-court-fee-input${isEdit && totalPaid !== calculatedCourtFee ? ' data-manual="true"' : ""}`;
   const shuttleCost = Number(session?.shuttleCost ?? state.settings.defaultShuttleCost ?? 5);
   const calculatedWaterCost = calculateWaterCost(courts);
   const waterCost = isEdit ? Number(session?.waterCost ?? 0) : Number(session?.waterCost ?? calculatedWaterCost);
   const waterCostAttrs = `data-water-cost-input${isEdit || waterCost !== calculatedWaterCost ? ' data-manual="true"' : ""}`;
   const calculatedPerPersonAmount = calculatePerPersonRate(totalPaid, expectedPlayers, shuttleCost);
   const perPersonAmount = isEdit ? Number(session?.perPersonAmount ?? 0) : perPersonRateValue(session?.perPersonAmount, totalPaid, expectedPlayers, shuttleCost);
-  const perPersonAttrs = `data-per-person-input${isEdit || perPersonAmount !== calculatedPerPersonAmount ? ' data-manual="true"' : ""}`;
+  const perPersonAttrs = `data-per-person-input${perPersonAmount !== calculatedPerPersonAmount ? ' data-manual="true"' : ""}`;
   return `
     <div class="modal-backdrop" data-modal-backdrop>
       <form class="modal-card" data-form="session" data-edit-id="${escapeAttr(session?.id || "")}" role="dialog" aria-modal="true" aria-labelledby="session-modal-title">
@@ -794,23 +818,29 @@ function renderSessionModal(sessionId = "") {
             ${field("date", "Date", "date", sessionDate, "modal", "data-session-date-source")}
             ${selectSimple("type", "Session Type", ["Friday", "Saturday", "FlexiDay"], sessionType, "modal")}
           </div>
-          <div class="session-form-row two">
-            ${timeSelectField("startTime", "Start Time", startTime, "modal", "data-session-cost-source")}
-            ${timeSelectField("endTime", "End Time", endTime, "modal", "data-session-cost-source")}
-          </div>
           ${selectField("courtId", "Court", orderedCourtOptions(), courtId, "name", "modal", "data-session-cost-source")}
+          <section class="session-court-slots" aria-labelledby="session-court-slots-title">
+            <div class="session-court-slots-heading">
+              <div>
+                <h3 id="session-court-slots-title">Court Time Slots</h3>
+                <p>Set the court count for each part of this session.</p>
+              </div>
+              <button class="btn icon-only" type="button" data-action="add-session-court-slot" aria-label="Add court time slot" title="Add time slot">${icon("plus")}</button>
+            </div>
+            <div class="session-court-slot-list" data-session-court-slot-list>
+              ${courtSlots.map((slot, index) => renderSessionCourtSlot(slot, index, courtSlots.length)).join("")}
+            </div>
+            <p class="session-court-slot-summary" data-session-court-slot-summary>${escapeHtml(`${Number(courtSlotCourtHours(courtSlots).toFixed(2))} court-hours; ${courts} courts set capacity`)}</p>
+          </section>
           <div class="session-form-row two">
-            ${numberField("courts", "Courts", courts, 1, "modal", "data-session-cost-source data-session-capacity-source")}
-            ${numberField("expectedPlayers", "Expected Players", expectedPlayers, 0, "modal", `${expectedPlayersAttrs} data-session-rate-source`)}
+            ${numberField("expectedPlayers", "Capacity", expectedPlayers, 0, "modal", "data-expected-players-input data-session-rate-source readonly aria-readonly=\"true\"")}
+            ${numberField("waterCost", "Water Cost", waterCost, 0, "modal", waterCostAttrs)}
           </div>
           <div class="session-form-row two">
-            ${numberField("totalPaid", "Court Fee", totalPaid, 0, "modal", "data-court-fee-input data-session-rate-source")}
+            ${numberField("totalPaid", "Court Fee", totalPaid, 0, "modal", `${totalPaidAttrs} data-session-rate-source`)}
             ${numberField("shuttleCost", "Shuttle Fee", shuttleCost, 0, "modal", "data-session-rate-source")}
           </div>
-          <div class="session-form-row two">
-            ${numberField("waterCost", "Water Cost", waterCost, 0, "modal", waterCostAttrs)}
-            ${numberField("perPersonAmount", "Per Person Rate", perPersonAmount, 0, "modal", perPersonAttrs)}
-          </div>
+          ${numberField("perPersonAmount", "Per Person Rate", perPersonAmount, 0, "modal", perPersonAttrs)}
         </div>
         <div class="toolbar modal-actions">
           <button class="btn" type="button" data-action="close-modal">Cancel</button>
