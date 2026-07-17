@@ -397,12 +397,6 @@ function normalizeRecurrenceFrequency(value) {
   return value === "weekly" ? "weekly" : "none";
 }
 
-function weeklyRecurrenceEndDate(startDate, weeks = 4) {
-  if (!validIsoSessionDate(startDate)) return "";
-  const count = normalizedIntegerSetting(weeks, 4, 1, MAX_RECURRING_SESSIONS);
-  return addDaysIso(startDate, (count - 1) * 7);
-}
-
 function buildSessionRecurrencePlan(startDate, frequency = "none", endDate = "") {
   if (!validIsoSessionDate(startDate)) {
     return { valid: false, message: "Select a valid session date.", frequency: "none", dates: [] };
@@ -511,13 +505,6 @@ function calculateExpectedPlayers(bookedCourts, playersPerCourt) {
   const perCourt = Number(playersPerCourt || 0);
   if (!Number.isFinite(courtCount) || !Number.isFinite(perCourt)) return 0;
   return Math.max(0, courtCount) * Math.max(0, perCourt);
-}
-
-function calculateWaterCost(bookedCourts, costPerTwoCourts = state?.settings?.defaultWaterCostPerTwoCourts ?? 6) {
-  const courtCount = Math.max(0, Number(bookedCourts || 0));
-  if (!Number.isFinite(courtCount) || courtCount <= 0) return 0;
-  const unitCost = Math.max(0, Number(costPerTwoCourts || 0));
-  return Math.ceil(courtCount / 2) * unitCost;
 }
 
 function expectedPlayersValue(value, bookedCourts, playersPerCourt) {

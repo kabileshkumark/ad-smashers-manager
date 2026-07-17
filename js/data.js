@@ -9,7 +9,6 @@ function emptyState() {
       defaultCourtId: "",
       defaultPlayersPerCourt: PLAYERS_PER_COURT,
       defaultShuttleCost: 5,
-      defaultWaterCostPerTwoCourts: 6,
       defaultFridayStartTime: "19:00",
       defaultFridayEndTime: "21:00",
       defaultFridayCourts: 2,
@@ -21,12 +20,9 @@ function emptyState() {
       defaultFlexiDayCourts: 2,
       autoCalculateCourtFee: true,
       defaultCourtFee: 0,
-      autoCalculateWaterCost: true,
-      defaultWaterCost: 0,
       autoCalculatePerPersonRate: true,
       defaultPerPersonAmount: 0,
       defaultRecurrence: "none",
-      defaultRecurrenceWeeks: 4,
       shuttleType: "Yonex Mavis 350 Green Cap",
       currency: "AED",
       pollTemplate: defaultPollTemplate(),
@@ -79,15 +75,9 @@ function validateSessionSettingsCandidate(settings = {}) {
   if (!Number.isInteger(playersPerCourt) || playersPerCourt < 1 || playersPerCourt > 24) {
     return { valid: false, message: "Players per Court must be between 1 and 24." };
   }
-  const recurrenceWeeks = Number(settings.defaultRecurrenceWeeks);
-  if (!Number.isInteger(recurrenceWeeks) || recurrenceWeeks < 1 || recurrenceWeeks > MAX_RECURRING_SESSIONS) {
-    return { valid: false, message: `Default Weekly Sessions must be between 1 and ${MAX_RECURRING_SESSIONS}.` };
-  }
   const amountFields = [
     ["defaultShuttleCost", "Shuttle Fee"],
-    ["defaultWaterCostPerTwoCourts", "Water per 2 Courts"],
     ["defaultCourtFee", "Fixed Court Fee"],
-    ["defaultWaterCost", "Fixed Water Cost"],
     ["defaultPerPersonAmount", "Fixed Per Person Rate"]
   ];
   for (const [fieldName, label] of amountFields) {
@@ -116,11 +106,14 @@ function validateSessionSettingsCandidate(settings = {}) {
 
 function normalizeSessionSettings(settings = {}) {
   const normalized = { ...settings };
+  delete normalized.defaultWaterCostPerTwoCourts;
+  delete normalized.autoCalculateWaterCost;
+  delete normalized.defaultWaterCost;
+  delete normalized.defaultRecurrenceWeeks;
   normalized.defaultSessionWeekday = normalizedIntegerSetting(settings.defaultSessionWeekday, 5, 0, 6);
   normalized.defaultCourtId = String(settings.defaultCourtId || "");
   normalized.defaultPlayersPerCourt = normalizedIntegerSetting(settings.defaultPlayersPerCourt, PLAYERS_PER_COURT, 1, 24);
   normalized.defaultShuttleCost = normalizedAmountSetting(settings.defaultShuttleCost, 5);
-  normalized.defaultWaterCostPerTwoCourts = normalizedAmountSetting(settings.defaultWaterCostPerTwoCourts, 6);
   [
     ["Friday", "19:00", "21:00"],
     ["Saturday", "18:00", "20:00"],
@@ -139,12 +132,9 @@ function normalizeSessionSettings(settings = {}) {
   });
   normalized.autoCalculateCourtFee = normalizedBooleanSetting(settings.autoCalculateCourtFee, true);
   normalized.defaultCourtFee = normalizedAmountSetting(settings.defaultCourtFee, 0);
-  normalized.autoCalculateWaterCost = normalizedBooleanSetting(settings.autoCalculateWaterCost, true);
-  normalized.defaultWaterCost = normalizedAmountSetting(settings.defaultWaterCost, 0);
   normalized.autoCalculatePerPersonRate = normalizedBooleanSetting(settings.autoCalculatePerPersonRate, true);
   normalized.defaultPerPersonAmount = normalizedAmountSetting(settings.defaultPerPersonAmount, 0);
   normalized.defaultRecurrence = settings.defaultRecurrence === "weekly" ? "weekly" : "none";
-  normalized.defaultRecurrenceWeeks = normalizedIntegerSetting(settings.defaultRecurrenceWeeks, 4, 1, 53);
   return normalized;
 }
 

@@ -33,13 +33,9 @@ function updateSessionModalCalculations(form) {
   const courts = courtSlotMaxCourts(courtSlots);
   const playersPerCourt = state.settings.defaultPlayersPerCourt || PLAYERS_PER_COURT;
   const shuttleCost = Number(fields.shuttleCost?.value ?? state.settings.defaultShuttleCost ?? 5);
-  const waterCostInput = fields.waterCost;
   const expectedPlayersInput = fields.expectedPlayers;
   if (expectedPlayersInput) {
     expectedPlayersInput.value = calculateExpectedPlayers(courts, playersPerCourt);
-  }
-  if (waterCostInput && waterCostInput.dataset.manual !== "true") {
-    waterCostInput.value = calculateWaterCost(courts);
   }
   const courtFeeInput = form?.querySelector("[data-court-fee-input]");
   if (courtFeeInput && courtFeeInput.dataset.manual !== "true") {
@@ -102,7 +98,7 @@ function updateSessionRecurrenceControls(form) {
     endInput.disabled = frequency !== "weekly";
     endInput.required = frequency === "weekly";
     if (frequency === "weekly" && !endInput.value) {
-      endInput.value = weeklyRecurrenceEndDate(startDate, state.settings.defaultRecurrenceWeeks);
+      endInput.value = startDate;
     }
   }
   const plan = buildSessionRecurrencePlan(startDate, frequency, endInput?.value || "");
@@ -137,7 +133,7 @@ function applySessionDateDefaults(form) {
   }
   const recurrenceEnd = form.querySelector("[data-session-recurrence-end]");
   if (recurrenceEnd && recurrenceEnd.dataset.manual !== "true") {
-    recurrenceEnd.value = weeklyRecurrenceEndDate(fields.date.value, state.settings.defaultRecurrenceWeeks);
+    recurrenceEnd.value = fields.date.value;
   }
   updateSessionModalCalculations(form);
   updateSessionRecurrenceControls(form);
@@ -1018,10 +1014,6 @@ function handleInput(event) {
   if (expectedPlayersInput) {
     expectedPlayersInput.dataset.manual = "true";
   }
-  const waterCostInput = event.target.closest("[data-water-cost-input]");
-  if (waterCostInput) {
-    waterCostInput.dataset.manual = "true";
-  }
   const perPersonInput = event.target.closest("[data-per-person-input]");
   if (perPersonInput) {
     perPersonInput.dataset.manual = "true";
@@ -1052,7 +1044,7 @@ function handleInput(event) {
     applySessionDateDefaults(sessionDateSource.closest('form[data-form="session"]'));
     return;
   }
-  const sessionCalculationSource = event.target.closest("[data-session-cost-source], [data-session-capacity-source], [data-session-rate-source], [data-court-fee-input], [data-water-cost-input]");
+  const sessionCalculationSource = event.target.closest("[data-session-cost-source], [data-session-capacity-source], [data-session-rate-source], [data-court-fee-input]");
   if (sessionCalculationSource) {
     updateSessionModalCalculations(sessionCalculationSource.closest('form[data-form="session"]'));
     return;
@@ -1119,7 +1111,6 @@ async function handleSubmit(event) {
       defaultCourtId: fields.defaultCourtId.value,
       defaultPlayersPerCourt: fields.defaultPlayersPerCourt.value,
       defaultShuttleCost: fields.defaultShuttleCost.value,
-      defaultWaterCostPerTwoCourts: fields.defaultWaterCostPerTwoCourts.value,
       defaultFridayStartTime: fields.defaultFridayStartTime.value,
       defaultFridayEndTime: fields.defaultFridayEndTime.value,
       defaultFridayCourts: fields.defaultFridayCourts.value,
@@ -1131,12 +1122,9 @@ async function handleSubmit(event) {
       defaultFlexiDayCourts: fields.defaultFlexiDayCourts.value,
       autoCalculateCourtFee: fields.autoCalculateCourtFee.checked,
       defaultCourtFee: fields.defaultCourtFee.value,
-      autoCalculateWaterCost: fields.autoCalculateWaterCost.checked,
-      defaultWaterCost: fields.defaultWaterCost.value,
       autoCalculatePerPersonRate: fields.autoCalculatePerPersonRate.checked,
       defaultPerPersonAmount: fields.defaultPerPersonAmount.value,
-      defaultRecurrence: fields.defaultRecurrence.value,
-      defaultRecurrenceWeeks: fields.defaultRecurrenceWeeks.value
+      defaultRecurrence: fields.defaultRecurrence.value
     };
     const validation = validateSessionSettingsCandidate(candidate);
     if (!validation.valid) {
@@ -1211,9 +1199,11 @@ async function handleSubmit(event) {
     const shuttleCost = data.shuttleCost === ""
       ? Number(existingSession?.shuttleCost ?? state.settings.defaultShuttleCost ?? 5)
       : Number(data.shuttleCost ?? existingSession?.shuttleCost ?? state.settings.defaultShuttleCost ?? 5);
-    const waterCost = data.waterCost === ""
-      ? Number(existingSession?.waterCost ?? (existingSession ? 0 : calculateWaterCost(bookedCourts)))
-      : Number(data.waterCost ?? existingSession?.waterCost ?? (existingSession ? 0 : calculateWaterCost(bookedCourts)));
+    const waterCost = data.waterCost === "" ? 0 : Number(data.waterCost);
+    if (!Number.isFinite(waterCost) || waterCost < 0) {
+      showToast("Water Cost must be zero or more.");
+      return;
+    }
     const perPersonManual = form.elements.perPersonAmount?.dataset.manual === "true";
     const perPersonAmount = existingSession
       ? Number(data.perPersonAmount || 0)

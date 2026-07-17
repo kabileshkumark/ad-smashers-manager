@@ -87,12 +87,10 @@ function renderSessionDefaultsSettings() {
           ${settingsFormSelect("defaultCourtId", "Default Court", courtOptions, settings.defaultCourtId)}
           ${settingsFormField("defaultPlayersPerCourt", "Players per Court", "number", settings.defaultPlayersPerCourt, 'min="1" max="24" step="1" required')}
           ${settingsFormField("defaultShuttleCost", "Shuttle Fee", "number", settings.defaultShuttleCost, 'min="0" step="0.01" required')}
-          ${settingsFormField("defaultWaterCostPerTwoCourts", "Water per 2 Courts", "number", settings.defaultWaterCostPerTwoCourts, 'min="0" step="0.01" required')}
           ${settingsFormSelect("defaultRecurrence", "Default Repeat", [
             { value: "none", label: "Once" },
             { value: "weekly", label: "Weekly" }
           ], settings.defaultRecurrence)}
-          ${settingsFormField("defaultRecurrenceWeeks", "Default Weekly Sessions", "number", settings.defaultRecurrenceWeeks, `min="1" max="${MAX_RECURRING_SESSIONS}" step="1" required`)}
         </div>
       </section>
       <section class="session-defaults-group">
@@ -114,15 +112,6 @@ function renderSessionDefaultsSettings() {
             "Fixed Court Fee",
             settings.autoCalculateCourtFee,
             settings.defaultCourtFee
-          )}
-          ${renderSessionDefaultCalculation(
-            "autoCalculateWaterCost",
-            "Calculate Water Cost",
-            "Use Water per 2 Courts",
-            "defaultWaterCost",
-            "Fixed Water Cost",
-            settings.autoCalculateWaterCost,
-            settings.defaultWaterCost
           )}
           ${renderSessionDefaultCalculation(
             "autoCalculatePerPersonRate",
@@ -940,14 +929,8 @@ function renderSessionModal(sessionId = "") {
   const totalPaidManual = isEdit ? totalPaid !== calculatedCourtFee : !settings.autoCalculateCourtFee;
   const totalPaidAttrs = `data-court-fee-input${totalPaidManual ? ' data-manual="true"' : ""}`;
   const shuttleCost = Number(session?.shuttleCost ?? settings.defaultShuttleCost ?? 5);
-  const calculatedWaterCost = calculateWaterCost(courts);
-  const waterCost = isEdit
-    ? Number(session?.waterCost ?? 0)
-    : settings.autoCalculateWaterCost
-      ? calculatedWaterCost
-      : settings.defaultWaterCost;
-  const waterCostManual = isEdit ? true : !settings.autoCalculateWaterCost;
-  const waterCostAttrs = `data-water-cost-input${waterCostManual ? ' data-manual="true"' : ""}`;
+  const waterCost = Number(session?.waterCost ?? 0);
+  const waterCostAttrs = 'data-water-cost-input data-manual="true"';
   const calculatedPerPersonAmount = calculatePerPersonRate(totalPaid, expectedPlayers, shuttleCost);
   const perPersonAmount = isEdit
     ? Number(session?.perPersonAmount ?? 0)
@@ -957,7 +940,7 @@ function renderSessionModal(sessionId = "") {
   const perPersonManual = isEdit ? perPersonAmount !== calculatedPerPersonAmount : !settings.autoCalculatePerPersonRate;
   const perPersonAttrs = `data-per-person-input${perPersonManual ? ' data-manual="true"' : ""}`;
   const recurrenceFrequency = isEdit ? "none" : normalizeRecurrenceFrequency(settings.defaultRecurrence);
-  const recurrenceEndDate = weeklyRecurrenceEndDate(sessionDate, settings.defaultRecurrenceWeeks);
+  const recurrenceEndDate = sessionDate;
   return `
     <div class="modal-backdrop" data-modal-backdrop>
       <form class="modal-card" data-form="session" data-edit-id="${escapeAttr(session?.id || "")}" role="dialog" aria-modal="true" aria-labelledby="session-modal-title">
