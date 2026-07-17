@@ -35,6 +35,40 @@ function sessionCourtSlotBreakdownText(session) {
     .join("; ");
 }
 
+function combinationCourtScheduleText(session) {
+  const slots = sessionCourtSlots(session);
+  if (slots.length < 2) return "";
+  const status = courtStatusText(session);
+  const heading = status === "booked"
+    ? "Courts booked by time:"
+    : status === "pre-booked"
+      ? "Courts pre-booked by time:"
+      : "Courts planned by time:";
+  return [
+    `🏟️ ${heading}`,
+    ...slots.map((slot) => `• ${messageCourtSlotTimeRange(slot)}: ${slot.courts} ${slot.courts === 1 ? "court" : "courts"}`)
+  ].join("\n");
+}
+
+function messageCourtSlotTimeRange(slot) {
+  const start = parseClockTime(slot.startTime);
+  const end = parseClockTime(slot.endTime);
+  return `${formatMessageClock(start, true, true)} to ${formatMessageClock(end, true, true)}`;
+}
+
+function pollScheduleText(session) {
+  const timeText = `⏱️${messageTimeRange(session)}`;
+  const courtSchedule = combinationCourtScheduleText(session);
+  if (courtSchedule) return `${timeText}\n\n${courtSchedule}\n`;
+  return `${timeText} - ${sessionCourtCountLabel(session)} courts ${courtStatusText(session)}`;
+}
+
+function finalListScheduleText(session) {
+  const timeText = `🕗 ${messageTimeRange(session, true)} 🕗`;
+  const courtSchedule = combinationCourtScheduleText(session);
+  return courtSchedule ? `${timeText}\n\n${courtSchedule}` : timeText;
+}
+
 function parseClockTime(value) {
   const [hours = "0", minutes = "0"] = String(value || "00:00").split(":");
   return {
@@ -214,6 +248,9 @@ function templateData(session) {
     date: messageDate(session.date),
     time: messageTimeRange(session),
     compact_time: messageTimeRange(session, true),
+    poll_schedule: pollScheduleText(session),
+    final_list_schedule: finalListScheduleText(session),
+    court_schedule: combinationCourtScheduleText(session),
     planned_courts: sessionCourtCountLabel(session),
     booking_status: courtStatusText(session),
     court_name: messageCourtName(court),
@@ -280,7 +317,8 @@ function normalizePollTemplateCopy(template) {
     .replaceAll("1. I'm In", "1. I'm in")
     .replaceAll("2. I'm In +1", "2. I'm in +1")
     .replaceAll("3. I'm In +2", "3. I'm in +2")
-    .replaceAll("4. I Need a Racket", "4. I need a racket");
+    .replaceAll("4. I Need a Racket", "4. I need a racket")
+    .replace(/⏱️\s*\{\{\s*time\s*\}\}\s*-\s*\{\{\s*planned_courts\s*\}\}\s*courts\s*\{\{\s*booking_status\s*\}\}/g, "{{poll_schedule}}");
 }
 
 function normalizeFinalListTemplateCopy(template) {
@@ -294,7 +332,8 @@ function normalizeFinalListTemplateCopy(template) {
     .replaceAll("{{per_person_amount}} / Person", "{{per_person_amount}} / person")
     .replaceAll("💰 Court Charges: To Be Split Equally Among Confirmed Players", "💰 Court charges: to be split equally among confirmed players")
     .replaceAll("🏸 Shuttle Charges:", "🏸 Shuttle charges:")
-    .replaceAll("AED per Player", "AED per player");
+    .replaceAll("AED per Player", "AED per player")
+    .replace(/🕗\s*\{\{\s*compact_time\s*\}\}\s*🕗/g, "{{final_list_schedule}}");
   return insertFinalListVoteOrderNotice(normalized);
 }
 
@@ -310,7 +349,7 @@ function insertFinalListVoteOrderNotice(template) {
 function defaultPollTemplate() {
   return [
     "Hi Makkalae 👋🏻, please vote here to join us on 🗓️ {{date}}.",
-    "⏱️{{time}} - {{planned_courts}} courts {{booking_status}}",
+    "{{poll_schedule}}",
     "⚡{{court_name}}",
     "📍{{location_link}}",
     "",
@@ -322,7 +361,7 @@ function defaultPollTemplate() {
 function defaultFinalListTemplate() {
   return [
     "🏸 {{date}} 🏸",
-    "🕗 {{compact_time}} 🕗",
+    "{{final_list_schedule}}",
     "",
     "⚡{{court_name}}",
     "📍{{location_link}}",

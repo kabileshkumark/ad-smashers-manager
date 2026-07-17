@@ -1339,8 +1339,8 @@ async function handleSubmit(event) {
   }
 
   if (formType === "templates") {
-    state.settings.pollTemplate = data.pollTemplate || defaultPollTemplate();
-    state.settings.finalListTemplate = data.finalListTemplate || defaultFinalListTemplate();
+    state.settings.pollTemplate = normalizePollTemplateCopy(data.pollTemplate || defaultPollTemplate());
+    state.settings.finalListTemplate = normalizeFinalListTemplateCopy(data.finalListTemplate || defaultFinalListTemplate());
     try {
       await saveStateNow();
       showToast("Templates saved.");
