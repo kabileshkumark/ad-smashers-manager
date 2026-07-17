@@ -4001,6 +4001,7 @@ test("shared icon actions and compact payment group controls keep stable dimensi
   };
   const sessionActions = block(/\.session-card-actions\s*\{[^}]+\}/);
   const sessionActionButton = block(/\.session-card-actions \.btn\.icon-only\s*\{[^}]+\}/);
+  const responsiveActionIcons = block(/\.session-card-actions \.icon,\s*\.payment-group-actions \.icon\s*\{[^}]+\}/);
   const paymentStatusButton = block(/\.payment-status-actions \.btn\.icon-only\s*\{[^}]+\}/);
   const paymentGroupHeader = block(/\.payment-group-header\s*\{[^}]+\}/);
   const paymentGroupActions = block(/\.payment-group-actions\s*\{[^}]+\}/);
@@ -4027,6 +4028,8 @@ test("shared icon actions and compact payment group controls keep stable dimensi
   assert.match(sessionActionButton, /min-width:\s*0/);
   assert.match(sessionActionButton, /min-height:\s*0/);
   assert.match(sessionActionButton, /aspect-ratio:\s*1/);
+  assert.match(responsiveActionIcons, /width:\s*clamp\(15px,\s*4\.6vw,\s*20px\)/);
+  assert.match(responsiveActionIcons, /height:\s*clamp\(15px,\s*4\.6vw,\s*20px\)/);
   assertSquare(paymentStatusButton, 40);
   assert.match(paymentStatusButton, /flex:\s*0 0 40px/);
   assertSquare(block(/\.player-card-actions \.btn\.icon-only\s*\{[^}]+\}/), 44);

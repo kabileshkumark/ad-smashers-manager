@@ -1974,7 +1974,8 @@ img {
   padding: 0;
 }
 
-.session-card-actions .icon {
+.session-card-actions .icon,
+.payment-group-actions .icon {
   width: clamp(15px, 4.6vw, 20px);
   height: clamp(15px, 4.6vw, 20px);
 }
