@@ -886,8 +886,13 @@ test("new session modal defaults from date and selects booking court", () => {
   assert.match(html, /name="slotStartTime"[^>]*value="19:00"/);
   assert.match(html, /name="slotEndTime"[^>]*value="21:00"/);
   assert.match(html, /name="slotCourts"[^>]*value="2"/);
-  assert.match(html, /name="expectedPlayers"[^>]*value="12"[^>]*readonly/);
-  assert.match(html, /4 court-hours; 2 courts set capacity/);
+  const capacityInput = html.match(/<input[^>]*name="expectedPlayers"[^>]*>/)?.[0] || "";
+  assert.match(capacityInput, /value="12"/);
+  assert.doesNotMatch(capacityInput, /readonly/);
+  assert.match(html, /Court Bookings/);
+  assert.match(html, /Booking 1/);
+  assert.match(html, /4 court-hours; 2 peak courts/);
+  assert.match(html, /data-action="reset-session-capacity"[^>]*disabled/);
   assert.match(html, /<option value="court-booking" selected>Booking<\/option>/);
   assert.match(html, /name="shuttleCost"[^>]*value="0"[^>]*data-session-rate-source/);
   assert.match(html, /name="waterCost"[^>]*value="0"[^>]*data-water-cost-input[^>]*data-manual="true"/);
@@ -912,7 +917,7 @@ test("existing session modal preserves explicit fee and rate overrides", () => {
     context,
     baseFixture({
       courts: [court("court-1", "Test Court", "Test Area", 50)],
-      sessions: [baseSession({ id: "manual-fee-session", courtSlots: slots, courtId: "court-1", totalPaid: 240, perPersonAmount: 20 })]
+      sessions: [baseSession({ id: "manual-fee-session", courtSlots: slots, courtId: "court-1", expectedPlayers: 18, totalPaid: 240, perPersonAmount: 20 })]
     })
   );
 
@@ -951,7 +956,7 @@ test("legacy water and recurrence-count defaults are removed without changing se
   assert.equal(run(context, "Object.hasOwn(state.settings, 'defaultRecurrenceWeeks')"), false);
 });
 
-test("variable court slots derive total court-hours fee and highest-count capacity", () => {
+test("legacy variable court slots derive operations while preserving explicit capacity", () => {
   const context = createAppContext();
   const slots = [
     { startTime: "20:00", endTime: "21:00", courts: 3 },
@@ -969,10 +974,10 @@ test("variable court slots derive total court-hours fee and highest-count capaci
   assert.equal(run(context, "state.sessions[0].startTime"), "20:00");
   assert.equal(run(context, "state.sessions[0].endTime"), "22:00");
   assert.equal(run(context, "state.sessions[0].bookedCourts"), 3);
-  assert.equal(run(context, "state.sessions[0].expectedPlayers"), 18);
+  assert.equal(run(context, "state.sessions[0].expectedPlayers"), 6);
   assert.equal(run(context, "sessionCourtHours(state.sessions[0])"), 5);
   assert.equal(run(context, "calculateCourtFeeForSlots('court-1', state.sessions[0].courtSlots)"), 250);
-  assert.equal(run(context, "allocateSession(state.sessions[0]).capacity"), 18);
+  assert.equal(run(context, "allocateSession(state.sessions[0]).capacity"), 6);
   assert.equal(run(context, "sessionCourtCountLabel(state.sessions[0])"), "3 → 2");
   assert.deepEqual(jsonValue(context, "jsonFromFirestoreValue(firestoreValueFromJson(state.sessions[0].courtSlots))"), slots);
 
@@ -990,24 +995,21 @@ test("variable court slots derive total court-hours fee and highest-count capaci
   );
 });
 
-test("court slot validation rejects overlaps and supports overnight sequences", () => {
+test("court booking validation combines additive overlaps and supports overnight sequences", () => {
   const context = createAppContext();
 
   assert.equal(run(context, `validateCourtSlots([{ startTime: "20:00", endTime: "20:00", courts: 2 }]).valid`), false);
-  assert.equal(
-    run(context, `validateCourtSlots([
-      { startTime: "20:00", endTime: "21:00", courts: 3 },
-      { startTime: "20:30", endTime: "22:00", courts: 2 }
-    ]).valid`),
-    false
-  );
-  assert.match(
-    run(context, `validateCourtSlots([
-      { startTime: "20:00", endTime: "21:00", courts: 3 },
-      { startTime: "20:30", endTime: "22:00", courts: 2 }
-    ]).message`),
-    /overlaps/
-  );
+  context.__additiveBookings = [
+    { startTime: "19:00", endTime: "21:00", courts: 2 },
+    { startTime: "19:00", endTime: "20:00", courts: 1 }
+  ];
+  assert.equal(run(context, "validateCourtSlots(__additiveBookings).valid"), true);
+  assert.deepEqual(jsonValue(context, "validateCourtSlots(__additiveBookings).slots"), [
+    { startTime: "19:00", endTime: "20:00", courts: 3 },
+    { startTime: "20:00", endTime: "21:00", courts: 2 }
+  ]);
+  assert.equal(run(context, "courtSlotCourtHours(__additiveBookings)"), 5);
+  assert.equal(run(context, "courtSlotMaxCourts(__additiveBookings)"), 3);
   assert.equal(
     run(context, `courtSlotCourtHours([
       { startTime: "23:00", endTime: "00:00", courts: 2 },
@@ -1015,6 +1017,67 @@ test("court slot validation rejects overlaps and supports overnight sequences", 
     ])`),
     3
   );
+});
+
+test("original court bookings persist while the session card uses the derived timeline", () => {
+  const context = createAppContext();
+  const courtBookings = [
+    { startTime: "19:00", endTime: "21:00", courts: 2 },
+    { startTime: "19:00", endTime: "20:00", courts: 1 }
+  ];
+  setAppState(
+    context,
+    baseFixture({
+      sessions: [baseSession({ id: "additive-bookings", courtBookings, expectedPlayers: 16, totalPaid: 250 })]
+    })
+  );
+
+  assert.deepEqual(jsonValue(context, "state.sessions[0].courtBookings"), courtBookings);
+  assert.equal(run(context, "Object.hasOwn(state.sessions[0], 'courtSlots')"), false);
+  assert.deepEqual(
+    jsonValue(context, "jsonFromFirestoreValue(firestoreValueFromJson(state.sessions[0].courtBookings))"),
+    courtBookings
+  );
+  assert.deepEqual(jsonValue(context, "sessionCourtBookings(state.sessions[0])"), courtBookings);
+  assert.deepEqual(jsonValue(context, "sessionCourtSlots(state.sessions[0])"), [
+    { startTime: "19:00", endTime: "20:00", courts: 3 },
+    { startTime: "20:00", endTime: "21:00", courts: 2 }
+  ]);
+  assert.equal(run(context, "sessionCourtHours(state.sessions[0])"), 5);
+  assert.equal(run(context, "sessionMaxCourts(state.sessions[0])"), 3);
+  assert.equal(run(context, "sessionCourtCountLabel(state.sessions[0])"), "3 → 2");
+  assert.equal(run(context, "allocateSession(state.sessions[0]).capacity"), 16);
+
+  const modalHtml = run(context, 'renderSessionModal("additive-bookings")');
+  assert.equal((modalHtml.match(/data-session-court-slot>/g) || []).length, 2);
+  assert.match(modalHtml, /name="slotStartTime"[^>]*value="19:00"[\s\S]*name="slotEndTime"[^>]*value="21:00"[\s\S]*name="slotCourts"[^>]*value="2"/);
+  assert.match(modalHtml, /name="expectedPlayers"[^>]*value="16"[^>]*data-manual="true"/);
+  assert.match(modalHtml, /data-action="reset-session-capacity"(?![^>]*disabled)/);
+  assert.match(modalHtml, /5 court-hours; 3 peak courts/);
+
+  const cardHtml = run(context, "renderSessionCard(state.sessions[0])");
+  assert.match(cardHtml, /<span>Courts<\/span><strong>3 → 2<\/strong>/);
+  assert.match(cardHtml, /7:00 to 8:00 PM/);
+  assert.match(cardHtml, /8:00 to 9:00 PM/);
+});
+
+test("slot sessions without saved capacity default to peak courts times players per court", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      sessions: [baseSession({
+        courtBookings: [
+          { startTime: "19:00", endTime: "21:00", courts: 2 },
+          { startTime: "19:00", endTime: "20:00", courts: 1 }
+        ],
+        expectedPlayers: undefined
+      })]
+    })
+  );
+
+  assert.equal(run(context, "state.sessions[0].expectedPlayers"), 18);
+  assert.equal(run(context, "allocateSession(state.sessions[0]).capacity"), 18);
 });
 
 test("legacy single-allocation sessions keep their stored capacity until edited", () => {
@@ -1047,9 +1110,11 @@ test("court slot changes are part of the protected session financial basis", () 
     bookedCourts: 3,
     plannedCourts: 3
   };
+  context.__capacityChanged = { ...context.__current, expectedPlayers: context.__current.expectedPlayers + 1 };
 
   assert.equal(run(context, "sessionFinancialBasisChanged(__current, __same)"), false);
   assert.equal(run(context, "sessionFinancialBasisChanged(__current, __changed)"), true);
+  assert.equal(run(context, "sessionFinancialBasisChanged(__current, __capacityChanged)"), true);
 });
 
 test("session date defaults choose friday saturday and flexiday timings", () => {
@@ -1102,6 +1167,62 @@ test("session date change updates modal type and time defaults", () => {
   );
 
   assert.deepEqual(result, { type: "Saturday", startTime: "18:00", endTime: "20:00", expectedPlayers: 12, waterCost: "12", perPersonAmount: 22 });
+});
+
+test("manual session capacity stays fixed and reset restores the peak-court suggestion", () => {
+  const context = createAppContext();
+  setAppState(context, baseFixture({ courts: [court("court-1", "Court One", "Area", 50)] }));
+
+  const result = jsonValue(
+    context,
+    `(() => {
+      const resetButton = { disabled: true };
+      const summary = { textContent: "" };
+      const form = {
+        elements: {
+          startTime: { value: "19:00" },
+          endTime: { value: "21:00" },
+          courts: { value: "3" },
+          courtId: { value: "court-1" },
+          expectedPlayers: { value: "16", dataset: { manual: "true" } },
+          totalPaid: { value: "300", dataset: { manual: "true" } },
+          shuttleCost: { value: "0" },
+          perPersonAmount: { value: "19", dataset: {} }
+        },
+        querySelector(selector) {
+          if (selector === "[data-court-fee-input]") return this.elements.totalPaid;
+          if (selector === "[data-session-court-slot-summary]") return summary;
+          if (selector === '[data-action="reset-session-capacity"]') return resetButton;
+          return null;
+        }
+      };
+      updateSessionModalCalculations(form);
+      const manualCapacity = form.elements.expectedPlayers.value;
+      const manualRate = form.elements.perPersonAmount.value;
+      const resetEnabled = !resetButton.disabled;
+      delete form.elements.expectedPlayers.dataset.manual;
+      updateSessionModalCalculations(form);
+      return {
+        manualCapacity,
+        manualRate,
+        resetEnabled,
+        suggestedCapacity: form.elements.expectedPlayers.value,
+        suggestedRate: form.elements.perPersonAmount.value,
+        resetDisabled: resetButton.disabled,
+        summary: summary.textContent
+      };
+    })()`
+  );
+
+  assert.deepEqual(result, {
+    manualCapacity: "16",
+    manualRate: 19,
+    resetEnabled: true,
+    suggestedCapacity: 18,
+    suggestedRate: 17,
+    resetDisabled: true,
+    summary: "6 court-hours; 3 peak courts"
+  });
 });
 
 test("session defaults validate every configurable schedule and amount", () => {
@@ -1249,7 +1370,7 @@ test("weekly creation produces independent sessions and blocks partial duplicate
     startTime: "18:00",
     endTime: "20:00",
     courtId: "court-1",
-    courtSlots: [{ startTime: "18:00", endTime: "20:00", courts: 3 }],
+    courtBookings: [{ startTime: "18:00", endTime: "20:00", courts: 3 }],
     plannedCourts: 3,
     bookedCourts: 3,
     playersPerCourt: 6,
@@ -1278,8 +1399,9 @@ test("weekly creation produces independent sessions and blocks partial duplicate
     creation.records[0].recurrence
   );
 
-  run(context, "__creation.records[1].courtSlots[0].courts = 2; __creation.records[1].totalPaid = 200");
-  assert.equal(run(context, "__creation.records[0].courtSlots[0].courts"), 3);
+  run(context, "__creation.records[1].courtBookings[0].courts = 2; __creation.records[1].totalPaid = 200");
+  assert.equal(run(context, "__creation.records[0].courtBookings[0].courts"), 3);
+  assert.equal(run(context, "Object.hasOwn(__creation.records[0], 'courtSlots')"), false);
   assert.equal(run(context, "__creation.records[0].totalPaid"), 300);
   assert.notEqual(run(context, "__creation.records[0].responses === __creation.records[1].responses"), true);
 
@@ -1302,7 +1424,7 @@ test("one recurring occurrence can be edited or cancelled without changing the o
     startTime: "18:00",
     endTime: "20:00",
     courtId: "court-1",
-    courtSlots: [{ startTime: "18:00", endTime: "20:00", courts: 3 }],
+    courtBookings: [{ startTime: "18:00", endTime: "20:00", courts: 3 }],
     plannedCourts: 3,
     bookedCourts: 3,
     playersPerCourt: 6,

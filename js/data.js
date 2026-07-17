@@ -317,14 +317,17 @@ function normalizeTextMap(value = {}) {
 function normalizeSession(session, settings = state?.settings || {}) {
   const playersPerCourt = Number(session.playersPerCourt || settings.defaultPlayersPerCourt || PLAYERS_PER_COURT);
   const type = sessionTypeForDate(session.date, session.type);
-  const hasCourtSlots = Array.isArray(session.courtSlots) && session.courtSlots.length > 0;
-  const courtSlots = hasCourtSlots ? sessionCourtSlots(session) : [];
-  const bookedCourts = hasCourtSlots ? courtSlotMaxCourts(courtSlots) : Number(session.bookedCourts || session.plannedCourts || 0);
-  const plannedCourts = hasCourtSlots ? bookedCourts : Number(session.plannedCourts ?? bookedCourts);
-  const startTime = hasCourtSlots ? courtSlots[0].startTime : session.startTime;
-  const endTime = hasCourtSlots ? courtSlots[courtSlots.length - 1].endTime : session.endTime;
+  const hasCourtBookings = Array.isArray(session.courtBookings) && session.courtBookings.length > 0;
+  const hasLegacyCourtSlots = !hasCourtBookings && Array.isArray(session.courtSlots) && session.courtSlots.length > 0;
+  const hasCourtSchedule = hasCourtBookings || hasLegacyCourtSlots;
+  const courtBookings = hasCourtSchedule ? sessionCourtBookings(session) : [];
+  const courtSlots = hasCourtSchedule ? sessionCourtSlots(session) : [];
+  const bookedCourts = hasCourtSchedule ? courtSlotMaxCourts(courtSlots) : Number(session.bookedCourts || session.plannedCourts || 0);
+  const plannedCourts = hasCourtSchedule ? bookedCourts : Number(session.plannedCourts ?? bookedCourts);
+  const startTime = hasCourtSchedule ? courtSlots[0].startTime : session.startTime;
+  const endTime = hasCourtSchedule ? courtSlots[courtSlots.length - 1].endTime : session.endTime;
   const fallbackExpectedPlayers = calculateExpectedPlayers(bookedCourts, playersPerCourt);
-  const expectedPlayers = hasCourtSlots ? fallbackExpectedPlayers : storedNumberOrFallback(session.expectedPlayers, fallbackExpectedPlayers);
+  const expectedPlayers = storedNumberOrFallback(session.expectedPlayers, fallbackExpectedPlayers);
   const waterCost = storedNumberOrFallback(session.waterCost, 0);
   const fallbackPerPersonAmount = calculatePerPersonRate(
     session.totalPaid,
@@ -367,7 +370,13 @@ function normalizeSession(session, settings = state?.settings || {}) {
   };
   if (recurrence) normalized.recurrence = recurrence;
   else delete normalized.recurrence;
-  if (hasCourtSlots) normalized.courtSlots = courtSlots;
+  if (hasCourtBookings) {
+    normalized.courtBookings = courtBookings;
+    delete normalized.courtSlots;
+  } else if (hasLegacyCourtSlots) {
+    normalized.courtSlots = courtBookings;
+    delete normalized.courtBookings;
+  }
   if (Array.isArray(session.attendedPlayerIds)) {
     normalized.attendedPlayerIds = uniqueIds(session.attendedPlayerIds);
   }
