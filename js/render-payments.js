@@ -294,14 +294,16 @@ function renderPaymentGroupCard(group) {
             <h3 class="row-title">${escapeHtml(group.name || "Payment Group")}</h3>
             <span class="badge ${balanceClass}">${balanceLabel}</span>
           </div>
-          <p class="row-subtitle">Paid by ${escapeHtml(payerName)} - ${memberCount} members</p>
-          <p class="row-subtitle payment-group-members">${escapeHtml(paymentGroupMemberNames(group))}</p>
-          ${summary.creditApplied > 0 ? `<p class="row-subtitle">${currency(summary.creditApplied)} Credit applied from ${escapeHtml(payerName)}</p>` : ""}
+          <div class="payment-group-details">
+            <p class="row-subtitle">Paid by ${escapeHtml(payerName)} - ${memberCount} members</p>
+            <p class="row-subtitle payment-group-members">${escapeHtml(paymentGroupMemberNames(group))}</p>
+            ${summary.creditApplied > 0 ? `<p class="row-subtitle">${currency(summary.creditApplied)} Credit applied from ${escapeHtml(payerName)}</p>` : ""}
+          </div>
         </div>
         <div class="payment-group-actions">
           <label class="field compact-field payment-group-amount-field">
             <span class="visually-hidden">Paid Amount</span>
-            <input class="input" type="number" name="amountPaid" min="0" step="0.01" inputmode="decimal" value="${balance > 0 ? escapeAttr(String(balance)) : ""}" placeholder="0" />
+            <input class="input" type="number" name="amountPaid" min="0" step="0.01" inputmode="decimal" autocomplete="off" />
           </label>
           <button class="btn primary icon-only" type="submit" ${balance > 0 ? "" : "disabled"} aria-label="Apply group payment for ${escapeAttr(group.name || "group")}" title="Apply group payment">${icon("wallet")}</button>
           <button class="btn icon-only" type="button" data-action="open-payment-group-copy" data-payment-group="${escapeAttr(group.id)}" aria-label="Copy payment details for ${escapeAttr(group.name || "group")}" title="Copy Payment Details">${icon("copy")}</button>
@@ -436,20 +438,22 @@ function renderAdvanceHistoryRow(summary) {
   const isActive = !summary.reversed;
   return `
     <article class="row-card payment-transaction-row advance-history-row">
-      <div class="row-main">
-        <div>
-          <h3 class="row-title">${summary.date ? escapeHtml(formatDate(summary.date)) : "Date not set"}</h3>
-          <p class="row-subtitle">Advance paid ${currency(summary.received)}, deducted ${currency(summary.deducted)}, balance ${currency(summary.balance)}${isActive ? "" : ", transaction reversed"}</p>
-          ${
-            summary.deductions.length
-              ? `<div class="payment-history-list advance-deduction-list">${summary.deductions.map((deduction) => renderAdvanceDeductionRow(deduction)).join("")}</div>`
-              : `<p class="row-subtitle">No deductions from this advance yet.</p>`
-          }
+      <div class="row-main advance-history-layout">
+        <div class="advance-history-head">
+          <div class="advance-history-summary">
+            <h3 class="row-title">${summary.date ? escapeHtml(formatDate(summary.date)) : "Date not set"}</h3>
+            <p class="row-subtitle">Advance paid ${currency(summary.received)}, deducted ${currency(summary.deducted)}, balance ${currency(summary.balance)}${isActive ? "" : ", transaction reversed"}</p>
+          </div>
+          <div class="toolbar nowrap advance-history-actions">
+            <span class="badge ${isActive ? (summary.balance ? "teal" : "green") : "gold"}">${isActive ? `${currency(summary.balance)} balance` : "Reversed"}</span>
+            <button class="btn icon-only danger" type="button" data-action="delete-payment-transaction" data-transaction="${escapeAttr(summary.id)}" ${isActive ? "" : "disabled"} aria-label="Reverse advance payment" title="Reverse">${icon("trash")}</button>
+          </div>
         </div>
-        <div class="toolbar nowrap">
-          <span class="badge ${isActive ? (summary.balance ? "teal" : "green") : "gold"}">${isActive ? `${currency(summary.balance)} balance` : "Reversed"}</span>
-          <button class="btn icon-only danger" type="button" data-action="delete-payment-transaction" data-transaction="${escapeAttr(summary.id)}" ${isActive ? "" : "disabled"} aria-label="Reverse advance payment" title="Reverse">${icon("trash")}</button>
-        </div>
+        ${
+          summary.deductions.length
+            ? `<div class="payment-history-list advance-deduction-list">${summary.deductions.map((deduction) => renderAdvanceDeductionRow(deduction)).join("")}</div>`
+            : `<p class="row-subtitle advance-history-empty">No deductions from this advance yet.</p>`
+        }
       </div>
     </article>
   `;

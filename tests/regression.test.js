@@ -845,6 +845,11 @@ test("player payment copy includes full history and due reminder options", () =>
   const groupCardHtml = run(context, 'renderPaymentGroupCard(getPaymentGroup("copy-group"))');
   assert.match(groupCardHtml, /open-payment-group-copy/);
   assert.match(groupCardHtml, /Copy Payment Details/);
+  assert.match(groupCardHtml, /payment-group-details/);
+  const groupAmountInput = groupCardHtml.match(/<input[^>]*name="amountPaid"[^>]*>/)?.[0] || "";
+  assert.ok(groupAmountInput);
+  assert.doesNotMatch(groupAmountInput, /\svalue=/);
+  assert.doesNotMatch(groupAmountInput, /placeholder="0"/);
 
   const groupModalHtml = run(context, 'renderPaymentGroupCopyModal("copy-group")');
   assert.match(groupModalHtml, /Copy Full History/);
@@ -2475,6 +2480,9 @@ test("payments page records player advances and copies deduction summary", () =>
   const historyHtml = run(context, 'renderAdvanceHistoryModal("payer")');
   assert.match(historyHtml, /Advance History/);
   assert.match(historyHtml, /Advance paid 200 AED, deducted 20 AED, balance 180 AED/);
+  assert.match(historyHtml, /advance-history-head/);
+  assert.match(historyHtml, /advance-history-actions/);
+  assert.match(historyHtml, /advance-deduction-list/);
   assert.match(historyHtml, /delete-payment-transaction/);
 
   assert.equal(run(context, 'deletePaymentTransaction(state.paymentTransactions[0].id)'), true);
@@ -3564,6 +3572,51 @@ test("loading screen renders animated badminton rally instead of shot labels", (
   assert.match(css, /@keyframes loadingNetTumble/);
 });
 
+test("dashboard logo navigation paints a loading overlay before rendering", () => {
+  const context = createAppContext();
+  const shell = fs.readFileSync(path.join(ROOT, "js/render-shell.js"), "utf8");
+  assert.equal((shell.match(/data-dashboard-logo="true"/g) || []).length, 2);
+
+  run(
+    context,
+    `
+      activeView = "payments";
+      __navigationFrames = [];
+      __navigationOverlayEvents = [];
+      __navigationRenderCount = 0;
+      window.requestAnimationFrame = (callback) => {
+        __navigationFrames.push(callback);
+        return __navigationFrames.length;
+      };
+      setAppLoadingOverlay = (visible, message) => {
+        __navigationOverlayEvents.push({ visible, message });
+      };
+      render = () => {
+        __navigationRenderCount += 1;
+      };
+    `
+  );
+
+  assert.equal(run(context, "navigateToDashboardWithLoading()"), true);
+  assert.equal(run(context, "navigateToDashboardWithLoading()"), false);
+  assert.deepEqual(jsonValue(context, "__navigationOverlayEvents"), [{ visible: true, message: "Opening Dashboard..." }]);
+  assert.equal(run(context, "__navigationRenderCount"), 0);
+  assert.equal(run(context, "__navigationFrames.length"), 1);
+
+  run(context, "__navigationFrames.shift()()");
+  assert.equal(run(context, "__navigationRenderCount"), 0);
+  assert.equal(run(context, "__navigationFrames.length"), 1);
+
+  run(context, "__navigationFrames.shift()()");
+  assert.equal(run(context, "activeView"), "dashboard");
+  assert.equal(run(context, "__navigationRenderCount"), 1);
+  assert.deepEqual(jsonValue(context, "__navigationOverlayEvents"), [
+    { visible: true, message: "Opening Dashboard..." },
+    { visible: false }
+  ]);
+  assert.equal(run(context, "viewNavigationPending"), false);
+});
+
 test("WhatsApp Business Android targets use the business package", () => {
   const context = createAppContext({ userAgent: "Mozilla/5.0 Android" });
 
@@ -3603,6 +3656,7 @@ test("shared icon action buttons keep square dimensions", () => {
   const sessionActions = block(/\.session-card-actions\s*\{[^}]+\}/);
   const sessionActionButton = block(/\.session-card-actions \.btn\.icon-only\s*\{[^}]+\}/);
   const paymentStatusButton = block(/\.payment-status-actions \.btn\.icon-only\s*\{[^}]+\}/);
+  const paymentGroupHeader = block(/\.payment-group-header\s*\{[^}]+\}/);
   const paymentGroupActions = block(/\.payment-group-actions\s*\{[^}]+\}/);
   const paymentGroupActionButton = block(/\.payment-group-actions \.btn\.icon-only\s*\{[^}]+\}/);
   const mobilePaymentGroupActions = block(/@media \(max-width:\s*640px\)[\s\S]*?\.payment-group-actions\s*\{[^}]+\}/);
@@ -3610,6 +3664,7 @@ test("shared icon action buttons keep square dimensions", () => {
   const mobileActivityButtons = block(/@media \(max-width:\s*640px\)[\s\S]*?\.activity-row-actions \.btn\.icon-only\s*\{[^}]+\}/);
   const shuttleSpentActions = block(/\.shuttle-spent-actions\s*\{[^}]+\}/);
   const mobileShuttleSpentActions = block(/@media \(max-width:\s*640px\)[\s\S]*?\.shuttle-spent-actions\s*\{[^}]+\}/);
+  const playerBalanceActions = block(/\.player-balance-actions\s*\{[^}]+\}/);
   const mobilePlayerBalanceButton = block(/@media \(max-width:\s*640px\)[\s\S]*?\.player-balance-actions \.btn\.icon-only\s*\{[^}]+\}/);
   const mobilePlayerBalanceRow = block(/@media \(max-width:\s*640px\)[\s\S]*?\.player-balance-row \.row-main\s*\{[^}]+\}/);
   const mobilePlayerBalanceActions = block(/@media \(max-width:\s*640px\)[\s\S]*?\.player-balance-actions\s*\{[^}]+\}/);
@@ -3628,13 +3683,16 @@ test("shared icon action buttons keep square dimensions", () => {
   assertSquare(paymentStatusButton, 40);
   assert.match(paymentStatusButton, /flex:\s*0 0 40px/);
   assertSquare(block(/\.player-card-actions \.btn\.icon-only\s*\{[^}]+\}/), 44);
-  assert.match(paymentGroupActions, /grid-template-columns:\s*minmax\(56px,\s*84px\)\s*repeat\(5,\s*minmax\(36px,\s*44px\)\)/);
+  assert.match(paymentGroupHeader, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(236px,\s*314px\)/);
+  assert.match(paymentGroupHeader, /"title actions"[\s\S]*"details details"/);
+  assert.match(paymentGroupActions, /grid-area:\s*actions/);
+  assert.match(paymentGroupActions, /grid-template-columns:\s*minmax\(44px,\s*1\.35fr\)\s*repeat\(5,\s*minmax\(34px,\s*1fr\)\)/);
   assert.match(paymentGroupActionButton, /width:\s*100%/);
   assert.match(paymentGroupActionButton, /height:\s*auto/);
   assert.match(paymentGroupActionButton, /min-width:\s*0/);
   assert.match(paymentGroupActionButton, /min-height:\s*0/);
   assert.match(paymentGroupActionButton, /aspect-ratio:\s*1/);
-  assert.match(mobilePaymentGroupActions, /grid-template-columns:\s*minmax\(54px,\s*68px\)\s*repeat\(5,\s*minmax\(34px,\s*40px\)\)/);
+  assert.match(mobilePaymentGroupActions, /grid-template-columns:\s*minmax\(44px,\s*1\.35fr\)\s*repeat\(5,\s*minmax\(34px,\s*1fr\)\)/);
   assert.match(mobilePaymentGroupActionButton, /width:\s*100%/);
   assert.match(mobilePaymentGroupActionButton, /height:\s*auto/);
   assert.match(mobilePaymentGroupActionButton, /aspect-ratio:\s*1/);
@@ -3643,9 +3701,15 @@ test("shared icon action buttons keep square dimensions", () => {
   assert.match(mobileShuttleSpentActions, /grid-template-columns:\s*repeat\(2,\s*40px\)/);
   assertSquare(mobileActivityButtons, 40);
   assert.match(mobileActivityButtons, /flex:\s*0 0 40px/);
-  assertSquare(mobilePlayerBalanceButton, 40);
-  assert.match(mobilePlayerBalanceButton, /flex:\s*0 0 40px/);
-  assert.match(mobilePlayerBalanceRow, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*;/);
+  assert.match(playerBalanceActions, /width:\s*clamp\(168px,\s*42vw,\s*212px\)/);
+  assert.match(playerBalanceActions, /align-self:\s*start/);
+  assert.match(playerBalanceActions, /justify-self:\s*end/);
+  assert.match(mobilePlayerBalanceButton, /width:\s*100%/);
+  assert.match(mobilePlayerBalanceButton, /height:\s*auto/);
+  assert.match(mobilePlayerBalanceButton, /min-width:\s*0/);
+  assert.match(mobilePlayerBalanceButton, /min-height:\s*0/);
+  assert.match(mobilePlayerBalanceButton, /aspect-ratio:\s*1/);
+  assert.match(mobilePlayerBalanceRow, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*auto/);
   assert.match(mobilePlayerBalanceActions, /justify-self:\s*end/);
   assert.match(playerBalanceChips, /flex:\s*1 1 100%/);
   assert.match(playerBalanceChipPair, /display:\s*inline-flex/);
@@ -3658,10 +3722,17 @@ test("payment history rows keep text column wide with compact actions", () => {
   const css = fs.readFileSync(path.join(ROOT, "styles.css"), "utf8");
   const historyRows = css.match(/\.payment-history-item \.row-main,\s*\.payment-transaction-row \.row-main\s*\{[^}]+\}/)?.[0] || "";
   const historyToolbar = css.match(/\.payment-history-modal \.toolbar\.nowrap\s*\{[^}]+\}/)?.[0] || "";
+  const advanceHistoryLayout = css.match(/\.advance-history-layout\s*\{[^}]+\}/)?.[0] || "";
+  const advanceHistoryHead = css.match(/\.advance-history-head\s*\{[^}]+\}/)?.[0] || "";
+  const advanceHistoryActions = css.match(/\.payment-history-modal \.toolbar\.advance-history-actions\s*\{[^}]+\}/)?.[0] || "";
 
   assert.match(historyRows, /grid-template-columns:\s*minmax\(0,\s*1fr\) auto/);
   assert.doesNotMatch(historyRows, /minmax\(192px,\s*232px\)/);
   assert.match(historyToolbar, /justify-content:\s*flex-end/);
+  assert.match(advanceHistoryLayout, /display:\s*block/);
+  assert.match(advanceHistoryHead, /grid-template-columns:\s*minmax\(0,\s*1fr\) auto/);
+  assert.match(advanceHistoryActions, /grid-template-columns:\s*auto 44px/);
+  assert.match(advanceHistoryActions, /width:\s*auto/);
 });
 
 test("modal values stay left aligned and focused fields scroll above mobile keyboards", async () => {
