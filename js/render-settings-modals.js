@@ -841,8 +841,8 @@ function renderSessionCourtSlot(slot, index, slotCount) {
   return `
     <div class="session-court-slot" data-session-court-slot>
       <div class="session-court-slot-heading">
-        <strong>Time Slot ${index + 1}</strong>
-        <button class="btn icon-only danger" type="button" data-action="remove-session-court-slot" aria-label="Remove time slot ${index + 1}" title="Remove time slot" ${slotCount > 1 ? "" : "disabled"}>${icon("trash")}</button>
+        <strong>Booking ${index + 1}</strong>
+        <button class="btn icon-only danger" type="button" data-action="remove-session-court-slot" aria-label="Remove court booking ${index + 1}" title="Remove booking" ${slotCount > 1 ? "" : "disabled"}>${icon("trash")}</button>
       </div>
       <div class="session-court-slot-fields">
         ${timeSelectField("slotStartTime", "From", slot.startTime, "modal", "data-session-cost-source")}
@@ -906,20 +906,24 @@ function renderSessionModal(sessionId = "") {
   const defaultTimes = { startTime: sessionDefaults.startTime, endTime: sessionDefaults.endTime };
   const configuredCourtId = orderedCourtOptions().some((court) => court.id === settings.defaultCourtId) ? settings.defaultCourtId : "";
   const courtId = session?.courtId || configuredCourtId || orderedCourtOptions()[0]?.id || "";
-  const courtSlots = sessionCourtSlots(session || {
+  const sessionDraft = session || {
     startTime: defaultTimes.startTime,
     endTime: defaultTimes.endTime,
     bookedCourts: sessionDefaults.courts,
     plannedCourts: sessionDefaults.courts
-  }).map((slot) => ({
-    ...slot,
-    startTime: normalizeHalfHourTime(slot.startTime, defaultTimes.startTime),
-    endTime: normalizeHalfHourTime(slot.endTime, defaultTimes.endTime)
+  };
+  const courtBookings = sessionCourtBookings(sessionDraft).map((booking) => ({
+    ...booking,
+    startTime: normalizeHalfHourTime(booking.startTime, defaultTimes.startTime),
+    endTime: normalizeHalfHourTime(booking.endTime, defaultTimes.endTime)
   }));
+  const courtSlots = validateCourtSlots(courtBookings).slots;
   const courts = courtSlotMaxCourts(courtSlots);
   const playersPerCourt = Number(session?.playersPerCourt || state.settings.defaultPlayersPerCourt || PLAYERS_PER_COURT);
   const calculatedExpectedPlayers = calculateExpectedPlayers(courts, playersPerCourt);
-  const expectedPlayers = calculatedExpectedPlayers;
+  const expectedPlayers = expectedPlayersValue(session?.expectedPlayers, courts, playersPerCourt);
+  const expectedPlayersManual = isEdit && expectedPlayers !== calculatedExpectedPlayers;
+  const expectedPlayersAttrs = `data-expected-players-input data-session-rate-source${expectedPlayersManual ? ' data-manual="true"' : ""}`;
   const calculatedCourtFee = calculateCourtFeeForSlots(courtId, courtSlots);
   const totalPaid = isEdit
     ? Number(session?.totalPaid ?? 0)
@@ -957,18 +961,20 @@ function renderSessionModal(sessionId = "") {
           <section class="session-court-slots" aria-labelledby="session-court-slots-title">
             <div class="session-court-slots-heading">
               <div>
-                <h3 id="session-court-slots-title">Court Time Slots</h3>
-                <p>Set the court count for each part of this session.</p>
+                <h3 id="session-court-slots-title">Court Bookings</h3>
               </div>
-              <button class="btn icon-only" type="button" data-action="add-session-court-slot" aria-label="Add court time slot" title="Add time slot">${icon("plus")}</button>
+              <button class="btn icon-only" type="button" data-action="add-session-court-slot" aria-label="Add court booking" title="Add booking">${icon("plus")}</button>
             </div>
             <div class="session-court-slot-list" data-session-court-slot-list>
-              ${courtSlots.map((slot, index) => renderSessionCourtSlot(slot, index, courtSlots.length)).join("")}
+              ${courtBookings.map((booking, index) => renderSessionCourtSlot(booking, index, courtBookings.length)).join("")}
             </div>
-            <p class="session-court-slot-summary" data-session-court-slot-summary>${escapeHtml(`${Number(courtSlotCourtHours(courtSlots).toFixed(2))} court-hours; ${courts} courts set capacity`)}</p>
+            <p class="session-court-slot-summary" data-session-court-slot-summary>${escapeHtml(`${Number(courtSlotCourtHours(courtSlots).toFixed(2))} court-hours; ${courts} peak ${courts === 1 ? "court" : "courts"}`)}</p>
           </section>
           <div class="session-form-row two">
-            ${numberField("expectedPlayers", "Capacity", expectedPlayers, 0, "modal", "data-expected-players-input data-session-rate-source readonly aria-readonly=\"true\"")}
+            <div class="session-capacity-control">
+              ${numberField("expectedPlayers", "Capacity", expectedPlayers, 0, "modal", expectedPlayersAttrs)}
+              <button class="btn icon-only" type="button" data-action="reset-session-capacity" aria-label="Reset capacity to suggested" title="Reset capacity" ${expectedPlayersManual ? "" : "disabled"}>${icon("refresh")}</button>
+            </div>
             ${numberField("waterCost", "Water Cost", waterCost, 0, "modal", waterCostAttrs)}
           </div>
           <div class="session-form-row two">

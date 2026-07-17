@@ -241,13 +241,11 @@ function sessionPaymentAmount(session, playerId, playersList = state.players, se
 }
 
 function allocateSession(session, playersList = state.players) {
-  const hasCourtSlots = Array.isArray(session.courtSlots) && session.courtSlots.length > 0;
-  const courtCount = hasCourtSlots ? sessionMaxCourts(session) : Number(session.bookedCourts || session.plannedCourts || 0);
+  const hasCourtSchedule = sessionHasCourtSchedule(session);
+  const courtCount = hasCourtSchedule ? sessionMaxCourts(session) : Number(session.bookedCourts || session.plannedCourts || 0);
   const playersPerCourt = getPlayersPerCourt(session);
   const entries = buildEntries(session, playersList);
-  const capacity = hasCourtSlots
-    ? calculateExpectedPlayers(courtCount, playersPerCourt)
-    : expectedPlayersValue(session.expectedPlayers, session.bookedCourts, playersPerCourt);
+  const capacity = expectedPlayersValue(session.expectedPlayers, courtCount, playersPerCourt);
   const courts = Array.from({ length: courtCount }, (_, index) => ({
     number: index + 1,
     players: [],
@@ -309,50 +307,109 @@ function courtSlotClockMinutes(value) {
   return hours * 60 + minutes;
 }
 
-function validateCourtSlots(slots) {
-  if (!Array.isArray(slots) || !slots.length) {
-    return { valid: false, message: "Add at least one court time slot.", slots: [], timeline: [] };
-  }
-  const normalized = normalizeCourtSlots(slots);
-  const timeline = [];
-  const firstStart = courtSlotClockMinutes(normalized[0].startTime);
-  let previousStart = firstStart;
-  let previousEnd = firstStart;
-  for (let index = 0; index < normalized.length; index += 1) {
-    const slot = normalized[index];
-    let startMinutes = courtSlotClockMinutes(slot.startTime);
-    while (index > 0 && startMinutes < previousStart) startMinutes += 24 * 60;
-    let endMinutes = courtSlotClockMinutes(slot.endTime);
-    if (endMinutes === startMinutes % (24 * 60)) {
-      return { valid: false, message: `Court time slot ${index + 1} must have different start and end times.`, slots: normalized, timeline: [] };
-    }
-    while (endMinutes < startMinutes) endMinutes += 24 * 60;
-    if (endMinutes - firstStart > 24 * 60) {
-      return { valid: false, message: "Court time slots must fit within one 24-hour session.", slots: normalized, timeline: [] };
-    }
-    if (index > 0 && startMinutes < previousEnd) {
-      return { valid: false, message: `Court time slot ${index + 1} overlaps the previous slot.`, slots: normalized, timeline: [] };
-    }
-    timeline.push({ ...slot, startMinutes, endMinutes, durationHours: (endMinutes - startMinutes) / 60 });
-    previousStart = startMinutes;
-    previousEnd = endMinutes;
-  }
-  return { valid: true, message: "", slots: normalized, timeline };
+function courtSlotClockFromMinutes(value) {
+  const minutes = ((Number(value || 0) % (24 * 60)) + 24 * 60) % (24 * 60);
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 }
 
-function sessionCourtSlots(session = {}) {
+function validateCourtSlots(slots) {
+  if (!Array.isArray(slots) || !slots.length) {
+    return { valid: false, message: "Add at least one court booking.", slots: [], timeline: [] };
+  }
+  const normalized = normalizeCourtSlots(slots);
+  const bookings = [];
+  for (let index = 0; index < normalized.length; index += 1) {
+    const booking = normalized[index];
+    const startClockMinutes = courtSlotClockMinutes(booking.startTime);
+    const endClockMinutes = courtSlotClockMinutes(booking.endTime);
+    if (startClockMinutes === endClockMinutes) {
+      return { valid: false, message: `Court booking ${index + 1} must have different start and end times.`, slots: normalized, timeline: [] };
+    }
+    const durationMinutes = (endClockMinutes - startClockMinutes + 24 * 60) % (24 * 60);
+    bookings.push({ ...booking, startClockMinutes, durationMinutes });
+  }
+
+  const candidateAnchors = [...new Set(bookings.map((booking) => booking.startClockMinutes))];
+  let alignedBookings = null;
+  let alignedSpan = Number.POSITIVE_INFINITY;
+  for (const anchor of candidateAnchors) {
+    const candidate = bookings.map((booking) => {
+      const startMinutes = booking.startClockMinutes < anchor
+        ? booking.startClockMinutes + 24 * 60
+        : booking.startClockMinutes;
+      return { ...booking, startMinutes, endMinutes: startMinutes + booking.durationMinutes };
+    });
+    const sessionEnd = Math.max(...candidate.map((booking) => booking.endMinutes));
+    const span = sessionEnd - anchor;
+    if (span <= 24 * 60 && span < alignedSpan) {
+      alignedBookings = candidate;
+      alignedSpan = span;
+    }
+  }
+  if (!alignedBookings) {
+    return { valid: false, message: "Court bookings must fit within one 24-hour session.", slots: normalized, timeline: [] };
+  }
+
+  const boundaries = [...new Set(alignedBookings.flatMap((booking) => [booking.startMinutes, booking.endMinutes]))].sort((a, b) => a - b);
+  const timeline = [];
+  for (let index = 0; index < boundaries.length - 1; index += 1) {
+    const startMinutes = boundaries[index];
+    const endMinutes = boundaries[index + 1];
+    const courts = alignedBookings
+      .filter((booking) => booking.startMinutes < endMinutes && booking.endMinutes > startMinutes)
+      .reduce((total, booking) => total + booking.courts, 0);
+    if (!courts) continue;
+    const previous = timeline[timeline.length - 1];
+    if (previous && previous.courts === courts && previous.endMinutes === startMinutes) {
+      previous.endMinutes = endMinutes;
+      previous.endTime = courtSlotClockFromMinutes(endMinutes);
+      previous.durationHours = (previous.endMinutes - previous.startMinutes) / 60;
+      continue;
+    }
+    timeline.push({
+      startTime: courtSlotClockFromMinutes(startMinutes),
+      endTime: courtSlotClockFromMinutes(endMinutes),
+      courts,
+      startMinutes,
+      endMinutes,
+      durationHours: (endMinutes - startMinutes) / 60
+    });
+  }
+  const canonicalSlots = timeline.map(({ startTime, endTime, courts }) => ({ startTime, endTime, courts }));
+  return { valid: true, message: "", slots: canonicalSlots, timeline };
+}
+
+function sessionHasCourtSchedule(session = {}) {
+  return (Array.isArray(session.courtBookings) && session.courtBookings.length > 0)
+    || (Array.isArray(session.courtSlots) && session.courtSlots.length > 0);
+}
+
+function sessionCourtBookings(session = {}) {
   const fallback = {
     startTime: session.startTime || "00:00",
     endTime: session.endTime || "01:00",
     courts: session.bookedCourts || session.plannedCourts || 1
   };
-  const candidate = normalizeCourtSlots(session.courtSlots, fallback);
+  const source = Array.isArray(session.courtBookings) && session.courtBookings.length
+    ? session.courtBookings
+    : session.courtSlots;
+  return normalizeCourtSlots(source, fallback);
+}
+
+function sessionCourtSlots(session = {}) {
+  const candidate = sessionCourtBookings(session);
   const validation = validateCourtSlots(candidate);
-  return validation.valid ? validation.slots : normalizeCourtSlots([], fallback);
+  return validation.valid ? validation.slots : normalizeCourtSlots([], {
+    startTime: session.startTime || "00:00",
+    endTime: session.endTime || "01:00",
+    courts: session.bookedCourts || session.plannedCourts || 1
+  });
 }
 
 function courtSlotMaxCourts(slots) {
-  return normalizeCourtSlots(slots).reduce((maximum, slot) => Math.max(maximum, slot.courts), 0);
+  const validation = validateCourtSlots(slots);
+  const source = validation.valid ? validation.slots : normalizeCourtSlots(slots);
+  return source.reduce((maximum, slot) => Math.max(maximum, slot.courts), 0);
 }
 
 function sessionMaxCourts(session) {
@@ -378,9 +435,9 @@ function sessionCourtCountLabel(session) {
 
 function sessionFinancialBasisChanged(currentSession, nextSession) {
   if (!currentSession || !nextSession) return false;
-  const fields = ["date", "startTime", "endTime", "courtId", "bookedCourts", "totalPaid", "shuttleCost", "waterCost", "perPersonAmount"];
+  const fields = ["date", "startTime", "endTime", "courtId", "bookedCourts", "expectedPlayers", "totalPaid", "shuttleCost", "waterCost", "perPersonAmount"];
   return fields.some((fieldName) => String(currentSession[fieldName] ?? "") !== String(nextSession[fieldName] ?? ""))
-    || JSON.stringify(sessionCourtSlots(currentSession)) !== JSON.stringify(sessionCourtSlots(nextSession));
+    || JSON.stringify(sessionCourtBookings(currentSession)) !== JSON.stringify(sessionCourtBookings(nextSession));
 }
 
 function validIsoSessionDate(value) {
@@ -455,13 +512,15 @@ function buildNewSessionRecords(baseData, recurrenceOptions = {}, existingSessio
   if (!plan.valid) return { ...plan, records: [] };
   const candidates = plan.dates.map((date) => {
     const type = sessionTypeForDate(date, baseData.type);
-    return {
+    const candidate = {
       ...baseData,
       date,
       type,
       groupId: sessionGroupIdFor({ date, type }),
-      courtSlots: sessionCourtSlots(baseData).map((slot) => ({ ...slot }))
+      courtBookings: sessionCourtBookings(baseData).map((booking) => ({ ...booking }))
     };
+    delete candidate.courtSlots;
+    return candidate;
   });
   const existingKeys = new Set((existingSessions || []).map((session) => sessionScheduleKey(session)));
   const conflict = candidates.find((candidate) => existingKeys.has(sessionScheduleKey(candidate)));

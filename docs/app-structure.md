@@ -381,27 +381,29 @@ Session fields:
 
 - Session type: Friday, Saturday, FlexiDay
 - Date
-- Court time slots: repeatable From, To, and Courts rows
+- Court bookings: repeatable From, To, and Courts rows that preserve the original venue bookings
 - Court venue
-- Court allocation sequence, for example 3 courts from 8-9 PM and 2 courts from 9-10 PM
-- Maximum court count, derived from the highest slot allocation
+- Derived court allocation sequence, for example 3 courts from 7-8 PM and 2 courts from 8-9 PM
+- Peak simultaneous court count, derived by summing every active booking
 - Players per court, default 6
-- Max confirmed capacity, derived from maximum court count multiplied by players per court
+- Max confirmed capacity, suggested from peak courts multiplied by players per court and manually overridable until reset
 - Booking status
 - Poll status
 - Payment status
 - Reminder status
 - Notes
 
-Court-slot rules:
+Court-booking rules:
 
-- At least one slot is required, with different start and end times and a minimum of one court.
-- Slots may be adjacent or have a gap, but they must be chronological, must not overlap, and must fit within one 24-hour session.
-- The suggested court fee is venue hourly rate multiplied by total court-hours across all slots.
-- The session start/end summary is derived from the first slot start and last slot end.
-- Session cards show the court-count sequence, such as `3 → 2`, plus the time breakdown when more than one slot exists.
-- Legacy sessions without slot data retain their stored capacity until they are edited and saved with the slot model.
-- A slot change is a financial-basis change and follows the same active-payment mutation guard as date, court, fee, and rate changes.
+- At least one booking is required, with different start and end times and a minimum of one court.
+- Bookings may be adjacent, gapped, or overlapping additions, but the complete schedule must fit within one 24-hour session.
+- Original booking rows are the stored source of truth. One shared calculator derives a non-overlapping active-court timeline.
+- The suggested court fee is venue hourly rate multiplied by total court-hours across all bookings.
+- The session start/end summary is derived from the first and last boundaries in the active-court timeline.
+- Session cards show the derived court-count sequence, such as `3 → 2`, plus its time breakdown.
+- A manually entered capacity remains fixed when bookings change; Reset restores peak courts multiplied by players per court.
+- Legacy sessions retain their existing slot representation and stored capacity until edited, then save as original court bookings.
+- Booking or capacity changes are financial-basis changes and follow the active-payment mutation guard used for date, court, fee, and rate changes.
 
 Session stages:
 

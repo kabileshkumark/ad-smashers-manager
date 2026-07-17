@@ -2692,6 +2692,22 @@ body.is-scrolling-content .bottom-nav {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.session-capacity-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--modal-control-height);
+  align-items: end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.session-capacity-control > .btn.icon-only {
+  width: var(--modal-control-height);
+  min-width: var(--modal-control-height);
+  height: var(--modal-control-height);
+  min-height: var(--modal-control-height);
+  border-radius: var(--modal-control-radius);
+}
+
 .session-court-slots {
   display: grid;
   gap: 10px;

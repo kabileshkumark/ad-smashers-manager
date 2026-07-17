@@ -4,7 +4,7 @@ let viewNavigationPending = false;
 function setSessionField(sessionId, fieldName, value) {
   const session = getSession(sessionId);
   const numeric = ["plannedCourts", "bookedCourts", "playersPerCourt", "expectedPlayers", "totalPaid", "perPersonAmount", "shuttleCost", "waterCost"];
-  const financialFields = new Set(["date", "startTime", "endTime", "courtId", "bookedCourts", "totalPaid", "perPersonAmount", "shuttleCost", "waterCost"]);
+  const financialFields = new Set(["date", "startTime", "endTime", "courtId", "bookedCourts", "expectedPlayers", "totalPaid", "perPersonAmount", "shuttleCost", "waterCost"]);
   if (financialFields.has(fieldName) && sessionHasActiveFinancialState(session)) {
     showToast("Clear active cash, Advance, or Credit coverage before changing this session's financial basis.");
     render();
@@ -34,7 +34,7 @@ function updateSessionModalCalculations(form) {
   const playersPerCourt = state.settings.defaultPlayersPerCourt || PLAYERS_PER_COURT;
   const shuttleCost = Number(fields.shuttleCost?.value ?? state.settings.defaultShuttleCost ?? 5);
   const expectedPlayersInput = fields.expectedPlayers;
-  if (expectedPlayersInput) {
+  if (expectedPlayersInput && expectedPlayersInput.dataset.manual !== "true") {
     expectedPlayersInput.value = calculateExpectedPlayers(courts, playersPerCourt);
   }
   const courtFeeInput = form?.querySelector("[data-court-fee-input]");
@@ -47,8 +47,10 @@ function updateSessionModalCalculations(form) {
   }
   const summary = form?.querySelector("[data-session-court-slot-summary]");
   if (summary) {
-    summary.textContent = `${Number(courtSlotCourtHours(courtSlots).toFixed(2))} court-hours; ${courts} courts set capacity`;
+    summary.textContent = `${Number(courtSlotCourtHours(courtSlots).toFixed(2))} court-hours; ${courts} peak ${courts === 1 ? "court" : "courts"}`;
   }
+  const resetCapacityButton = form?.querySelector('[data-action="reset-session-capacity"]');
+  if (resetCapacityButton) resetCapacityButton.disabled = expectedPlayersInput?.dataset.manual !== "true";
 }
 
 function sessionCourtSlotsFromForm(form) {
@@ -68,21 +70,15 @@ function sessionCourtSlotsFromForm(form) {
   });
 }
 
-function clockTimeAfter(value, minutesToAdd) {
-  const start = courtSlotClockMinutes(value);
-  const total = (start + Math.max(30, Number(minutesToAdd || 60))) % (24 * 60);
-  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
-}
-
 function refreshSessionCourtSlotControls(form) {
   const rows = form?.querySelectorAll ? [...form.querySelectorAll("[data-session-court-slot]")] : [];
   rows.forEach((row, index) => {
     const heading = row.querySelector(".session-court-slot-heading strong");
     const removeButton = row.querySelector('[data-action="remove-session-court-slot"]');
-    if (heading) heading.textContent = `Time Slot ${index + 1}`;
+    if (heading) heading.textContent = `Booking ${index + 1}`;
     if (removeButton) {
       removeButton.disabled = rows.length <= 1;
-      removeButton.setAttribute("aria-label", `Remove time slot ${index + 1}`);
+      removeButton.setAttribute("aria-label", `Remove court booking ${index + 1}`);
     }
   });
 }
@@ -379,11 +375,10 @@ function handleClick(event) {
     if (!form || !list) return;
     const slots = sessionCourtSlotsFromForm(form);
     const lastSlot = slots[slots.length - 1] || { startTime: "20:00", endTime: "21:00", courts: 1 };
-    const durationMinutes = Math.max(30, sessionDurationHours(lastSlot.startTime, lastSlot.endTime) * 60 || 60);
     const nextSlot = {
-      startTime: lastSlot.endTime,
-      endTime: clockTimeAfter(lastSlot.endTime, durationMinutes),
-      courts: lastSlot.courts
+      startTime: lastSlot.startTime,
+      endTime: lastSlot.endTime,
+      courts: 1
     };
     list.insertAdjacentHTML("beforeend", renderSessionCourtSlot(nextSlot, slots.length, slots.length + 1));
     refreshSessionCourtSlotControls(form);
@@ -400,6 +395,16 @@ function handleClick(event) {
     row.remove();
     refreshSessionCourtSlotControls(form);
     updateSessionModalCalculations(form);
+    return;
+  }
+
+  if (action === "reset-session-capacity") {
+    const form = actionTarget.closest('form[data-form="session"]');
+    const capacityInput = form?.elements?.expectedPlayers;
+    if (!form || !capacityInput) return;
+    delete capacityInput.dataset.manual;
+    updateSessionModalCalculations(form);
+    capacityInput.focus();
     return;
   }
 
@@ -1179,7 +1184,8 @@ async function handleSubmit(event) {
     const groupId = sessionGroupIdFor({ date: data.date, type });
     const existingSession = editId ? getSession(editId) : null;
     const defaultTimes = sessionDefaultTimesForDate(data.date, type);
-    const slotValidation = validateCourtSlots(sessionCourtSlotsFromForm(form));
+    const courtBookings = normalizeCourtSlots(sessionCourtSlotsFromForm(form));
+    const slotValidation = validateCourtSlots(courtBookings);
     if (!slotValidation.valid) {
       showToast(slotValidation.message);
       return;
@@ -1190,7 +1196,7 @@ async function handleSubmit(event) {
     const courts = courtSlotMaxCourts(courtSlots);
     const bookedCourts = courts;
     const playersPerCourt = Number(existingSession?.playersPerCourt || state.settings.defaultPlayersPerCourt || PLAYERS_PER_COURT);
-    const expectedPlayers = calculateExpectedPlayers(bookedCourts, playersPerCourt);
+    const expectedPlayers = expectedPlayersValue(data.expectedPlayers, bookedCourts, playersPerCourt);
     const totalPaid = existingSession
       ? Number(data.totalPaid || 0)
       : data.totalPaid === ""
@@ -1213,7 +1219,7 @@ async function handleSubmit(event) {
       date: data.date,
       startTime,
       endTime,
-      courtSlots,
+      courtBookings,
       groupId,
       courtId: data.courtId,
       plannedCourts: courts,
@@ -1236,6 +1242,7 @@ async function handleSubmit(event) {
         return;
       }
       Object.assign(existingSession, sessionData);
+      delete existingSession.courtSlots;
       updateSessionPerPersonAmount(existingSession, sessionData.perPersonAmount);
       applyAutomaticSessionStage(existingSession);
       syncSessionPayments(existingSession);
