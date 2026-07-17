@@ -383,6 +383,129 @@ function sessionFinancialBasisChanged(currentSession, nextSession) {
     || JSON.stringify(sessionCourtSlots(currentSession)) !== JSON.stringify(sessionCourtSlots(nextSession));
 }
 
+function validIsoSessionDate(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day, 12, 0, 0, 0);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day;
+}
+
+function normalizeRecurrenceFrequency(value) {
+  return value === "weekly" ? "weekly" : "none";
+}
+
+function weeklyRecurrenceEndDate(startDate, weeks = 4) {
+  if (!validIsoSessionDate(startDate)) return "";
+  const count = normalizedIntegerSetting(weeks, 4, 1, MAX_RECURRING_SESSIONS);
+  return addDaysIso(startDate, (count - 1) * 7);
+}
+
+function buildSessionRecurrencePlan(startDate, frequency = "none", endDate = "") {
+  if (!validIsoSessionDate(startDate)) {
+    return { valid: false, message: "Select a valid session date.", frequency: "none", dates: [] };
+  }
+  const normalizedFrequency = normalizeRecurrenceFrequency(frequency);
+  if (normalizedFrequency === "none") {
+    return { valid: true, message: "", frequency: normalizedFrequency, dates: [startDate], endDate: startDate };
+  }
+  if (!validIsoSessionDate(endDate)) {
+    return { valid: false, message: "Select a valid recurrence end date.", frequency: normalizedFrequency, dates: [] };
+  }
+  if (endDate < startDate) {
+    return { valid: false, message: "Recurrence end date cannot be before the first session.", frequency: normalizedFrequency, dates: [] };
+  }
+  const dates = [];
+  let nextDate = startDate;
+  while (nextDate <= endDate) {
+    if (dates.length >= MAX_RECURRING_SESSIONS) {
+      return {
+        valid: false,
+        message: `Create at most ${MAX_RECURRING_SESSIONS} weekly sessions at a time.`,
+        frequency: normalizedFrequency,
+        dates: []
+      };
+    }
+    dates.push(nextDate);
+    nextDate = addDaysIso(nextDate, 7);
+  }
+  return { valid: true, message: "", frequency: normalizedFrequency, dates, endDate };
+}
+
+function normalizeSessionRecurrence(recurrence) {
+  if (!recurrence || recurrence.frequency !== "weekly" || !recurrence.id) return null;
+  if (!validIsoSessionDate(recurrence.startDate) || !validIsoSessionDate(recurrence.endDate) || recurrence.endDate < recurrence.startDate) return null;
+  const count = normalizedIntegerSetting(recurrence.count, 1, 1, MAX_RECURRING_SESSIONS);
+  return {
+    id: String(recurrence.id),
+    frequency: "weekly",
+    startDate: recurrence.startDate,
+    endDate: recurrence.endDate,
+    sequence: normalizedIntegerSetting(recurrence.sequence, 1, 1, count),
+    count
+  };
+}
+
+function sessionScheduleKey(session) {
+  return [
+    String(session?.date || ""),
+    String(session?.courtId || ""),
+    JSON.stringify(sessionCourtSlots(session || {}))
+  ].join("|");
+}
+
+function buildNewSessionRecords(baseData, recurrenceOptions = {}, existingSessions = state.sessions) {
+  const plan = buildSessionRecurrencePlan(baseData?.date, recurrenceOptions.frequency, recurrenceOptions.endDate);
+  if (!plan.valid) return { ...plan, records: [] };
+  const candidates = plan.dates.map((date) => {
+    const type = sessionTypeForDate(date, baseData.type);
+    return {
+      ...baseData,
+      date,
+      type,
+      groupId: sessionGroupIdFor({ date, type }),
+      courtSlots: sessionCourtSlots(baseData).map((slot) => ({ ...slot }))
+    };
+  });
+  const existingKeys = new Set((existingSessions || []).map((session) => sessionScheduleKey(session)));
+  const conflict = candidates.find((candidate) => existingKeys.has(sessionScheduleKey(candidate)));
+  if (conflict) {
+    return {
+      valid: false,
+      message: `A matching session already exists on ${formatDate(conflict.date)}. No sessions were created.`,
+      frequency: plan.frequency,
+      dates: plan.dates,
+      records: []
+    };
+  }
+  const recurrenceId = plan.frequency === "weekly" ? createId("recurrence") : "";
+  const records = candidates.map((candidate, index) => {
+    const record = {
+      ...candidate,
+      id: createId("session"),
+      responses: [],
+      payments: {},
+      sent: {},
+      notes: ""
+    };
+    delete record.recurrence;
+    if (recurrenceId) {
+      record.recurrence = {
+        id: recurrenceId,
+        frequency: "weekly",
+        startDate: plan.dates[0],
+        endDate: plan.endDate,
+        sequence: index + 1,
+        count: plan.dates.length
+      };
+    }
+    return record;
+  });
+  return { ...plan, records };
+}
+
 function calculateExpectedPlayers(bookedCourts, playersPerCourt) {
   const courtCount = Number(bookedCourts || 0);
   const perCourt = Number(playersPerCourt || 0);
@@ -390,10 +513,11 @@ function calculateExpectedPlayers(bookedCourts, playersPerCourt) {
   return Math.max(0, courtCount) * Math.max(0, perCourt);
 }
 
-function calculateWaterCost(bookedCourts) {
+function calculateWaterCost(bookedCourts, costPerTwoCourts = state?.settings?.defaultWaterCostPerTwoCourts ?? 6) {
   const courtCount = Math.max(0, Number(bookedCourts || 0));
   if (!Number.isFinite(courtCount) || courtCount <= 0) return 0;
-  return Math.ceil(courtCount / 2) * 6;
+  const unitCost = Math.max(0, Number(costPerTwoCourts || 0));
+  return Math.ceil(courtCount / 2) * unitCost;
 }
 
 function expectedPlayersValue(value, bookedCourts, playersPerCourt) {

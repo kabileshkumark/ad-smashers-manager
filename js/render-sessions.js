@@ -59,6 +59,7 @@ function renderSessionCard(session, selectable = false) {
   const group = getSessionGroup(session);
   const courtSlots = sessionCourtSlots(session);
   const courtCount = sessionCourtCountLabel(session);
+  const recurring = Boolean(normalizeSessionRecurrence(session.recurrence));
   const groupUrl = safeWhatsappGroupUrl(group?.url || "");
   const whatsappGroupAction = groupUrl
     ? `<button class="btn icon-only" type="button" data-action="open-group" data-session="${escapeAttr(session.id)}" aria-label="Open WhatsApp Business group for ${escapeAttr(formatDate(session.date))}" title="Open WhatsApp Business group">${icon("message")}</button>`
@@ -90,7 +91,7 @@ function renderSessionCard(session, selectable = false) {
         <button class="btn icon-only" type="button" data-action="open-session-attendance" data-session="${escapeAttr(session.id)}" aria-label="Edit confirmed players" title="Confirmed">${icon("userCheck")}</button>
         <button class="btn icon-only" type="button" data-action="open-session-stage" data-session="${escapeAttr(session.id)}" aria-label="Change session stage" title="Stage">${icon("flag")}</button>
         <button class="btn icon-only" type="button" data-action="edit-session" data-session="${escapeAttr(session.id)}" aria-label="Edit ${escapeAttr(session.type)} Session" title="Edit Session">${icon("edit")}</button>
-        <button class="btn icon-only danger" type="button" data-action="delete-session" data-session="${escapeAttr(session.id)}" aria-label="Delete ${escapeAttr(session.type)} Session" title="Delete">${icon("trash")}</button>
+        <button class="btn icon-only danger" type="button" data-action="delete-session" data-session="${escapeAttr(session.id)}" aria-label="${recurring ? "Cancel this recurring session" : `Delete ${escapeAttr(session.type)} Session`}" title="${recurring ? "Cancel Occurrence" : "Delete"}">${icon(recurring ? "x" : "trash")}</button>
       </div>
     </article>
   `;
@@ -120,6 +121,7 @@ function renderSessionStageChips(session) {
     <div class="badge-row stage-badges">
       <span class="badge ${stageTone(stage)}">${escapeHtml(titleCase(stage))}</span>
       <span class="badge ${bookingStatus.tone}">${escapeHtml(bookingStatus.label)}</span>
+      ${normalizeSessionRecurrence(session.recurrence) ? '<span class="badge teal">Weekly</span>' : ""}
     </div>
   `;
 }

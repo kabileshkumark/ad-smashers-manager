@@ -91,24 +91,56 @@ function refreshSessionCourtSlotControls(form) {
   });
 }
 
+function updateSessionRecurrenceControls(form) {
+  if (!form || form.dataset.editId) return;
+  const frequency = normalizeRecurrenceFrequency(form.querySelector('[name="recurrence"]:checked')?.value || "none");
+  const fields = form.querySelector("[data-session-recurrence-fields]");
+  const endInput = form.querySelector("[data-session-recurrence-end]");
+  const startDate = form.elements.date?.value || "";
+  if (fields) fields.hidden = frequency !== "weekly";
+  if (endInput) {
+    endInput.disabled = frequency !== "weekly";
+    endInput.required = frequency === "weekly";
+    if (frequency === "weekly" && !endInput.value) {
+      endInput.value = weeklyRecurrenceEndDate(startDate, state.settings.defaultRecurrenceWeeks);
+    }
+  }
+  const plan = buildSessionRecurrencePlan(startDate, frequency, endInput?.value || "");
+  const summary = form.querySelector("[data-session-recurrence-summary]");
+  if (summary) {
+    summary.textContent = plan.valid && plan.dates.length
+      ? `${plan.dates.length} ${plan.dates.length === 1 ? "session" : "sessions"}`
+      : frequency === "weekly" ? "Check end date" : "One session";
+  }
+  const submit = form.querySelector("[data-session-submit-label]");
+  if (submit) submit.textContent = frequency === "weekly" ? "Create Sessions" : "Create Session";
+}
+
 function applySessionDateDefaults(form) {
   if (form?.dataset.editId) return;
   const fields = form?.elements;
   if (!fields?.date) return;
   const type = sessionTypeForDate(fields.date.value, fields.type?.value || "Friday");
   if (fields.type) fields.type.value = type;
-  const defaults = sessionDefaultTimesForType(type);
+  const defaults = sessionDefaultsForType(type);
   const slotRows = form.querySelectorAll ? [...form.querySelectorAll("[data-session-court-slot]")] : [];
   if (slotRows.length === 1) {
     const startInput = slotRows[0].querySelector('[name="slotStartTime"]');
     const endInput = slotRows[0].querySelector('[name="slotEndTime"]');
+    const courtsInput = slotRows[0].querySelector('[name="slotCourts"]');
     if (startInput) startInput.value = defaults.startTime;
     if (endInput) endInput.value = defaults.endTime;
+    if (courtsInput) courtsInput.value = defaults.courts;
   } else {
     if (fields.startTime) fields.startTime.value = defaults.startTime;
     if (fields.endTime) fields.endTime.value = defaults.endTime;
   }
+  const recurrenceEnd = form.querySelector("[data-session-recurrence-end]");
+  if (recurrenceEnd && recurrenceEnd.dataset.manual !== "true") {
+    recurrenceEnd.value = weeklyRecurrenceEndDate(fields.date.value, state.settings.defaultRecurrenceWeeks);
+  }
   updateSessionModalCalculations(form);
+  updateSessionRecurrenceControls(form);
 }
 
 function handlePointerDown(event) {
@@ -537,11 +569,15 @@ function handleClick(event) {
   }
   if (action === "delete-session" && session) {
     const label = `${session.type} - ${formatDate(session.date)}`;
+    const recurring = Boolean(normalizeSessionRecurrence(session.recurrence));
     openDeleteConfirmation({
       deleteType: "session",
       sessionId: session.id,
-      title: "Delete Session",
-      message: `Delete ${label}? This cannot be undone.`
+      confirmLabel: recurring ? "Cancel Session" : "Delete",
+      title: recurring ? "Cancel Session" : "Delete Session",
+      message: recurring
+        ? `Cancel ${label}? Other sessions in this weekly schedule will stay unchanged.`
+        : `Delete ${label}? This cannot be undone.`
     });
     return;
   }
@@ -990,6 +1026,20 @@ function handleInput(event) {
   if (perPersonInput) {
     perPersonInput.dataset.manual = "true";
   }
+  const recurrenceEndInput = event.target.closest("[data-session-recurrence-end]");
+  if (recurrenceEndInput) recurrenceEndInput.dataset.manual = "true";
+  const recurrenceSource = event.target.closest("[data-session-recurrence-source]");
+  if (recurrenceSource) {
+    updateSessionRecurrenceControls(recurrenceSource.closest('form[data-form="session"]'));
+    return;
+  }
+  const defaultAutoToggle = event.target.closest("[data-session-default-auto]");
+  if (defaultAutoToggle) {
+    const form = defaultAutoToggle.closest('form[data-form="session-defaults"]');
+    const controlledInput = form?.elements?.[defaultAutoToggle.dataset.controls];
+    if (controlledInput) controlledInput.disabled = defaultAutoToggle.checked;
+    return;
+  }
   const halfHourTimeInput = event.target.closest("[data-half-hour-time]");
   if (halfHourTimeInput && halfHourTimeInput.value) {
     const normalizedTime = normalizeHalfHourTime(halfHourTimeInput.value, halfHourTimeInput.value);
@@ -1060,6 +1110,49 @@ async function handleSubmit(event) {
   const editId = form.dataset.editId || "";
   const formData = new FormData(form);
   const data = Object.fromEntries(formData.entries());
+
+  if (formType === "session-defaults") {
+    const fields = form.elements;
+    const candidate = {
+      ...state.settings,
+      defaultSessionWeekday: fields.defaultSessionWeekday.value,
+      defaultCourtId: fields.defaultCourtId.value,
+      defaultPlayersPerCourt: fields.defaultPlayersPerCourt.value,
+      defaultShuttleCost: fields.defaultShuttleCost.value,
+      defaultWaterCostPerTwoCourts: fields.defaultWaterCostPerTwoCourts.value,
+      defaultFridayStartTime: fields.defaultFridayStartTime.value,
+      defaultFridayEndTime: fields.defaultFridayEndTime.value,
+      defaultFridayCourts: fields.defaultFridayCourts.value,
+      defaultSaturdayStartTime: fields.defaultSaturdayStartTime.value,
+      defaultSaturdayEndTime: fields.defaultSaturdayEndTime.value,
+      defaultSaturdayCourts: fields.defaultSaturdayCourts.value,
+      defaultFlexiDayStartTime: fields.defaultFlexiDayStartTime.value,
+      defaultFlexiDayEndTime: fields.defaultFlexiDayEndTime.value,
+      defaultFlexiDayCourts: fields.defaultFlexiDayCourts.value,
+      autoCalculateCourtFee: fields.autoCalculateCourtFee.checked,
+      defaultCourtFee: fields.defaultCourtFee.value,
+      autoCalculateWaterCost: fields.autoCalculateWaterCost.checked,
+      defaultWaterCost: fields.defaultWaterCost.value,
+      autoCalculatePerPersonRate: fields.autoCalculatePerPersonRate.checked,
+      defaultPerPersonAmount: fields.defaultPerPersonAmount.value,
+      defaultRecurrence: fields.defaultRecurrence.value,
+      defaultRecurrenceWeeks: fields.defaultRecurrenceWeeks.value
+    };
+    const validation = validateSessionSettingsCandidate(candidate);
+    if (!validation.valid) {
+      showToast(validation.message);
+      return;
+    }
+    if (candidate.defaultCourtId && !state.courts.some((court) => court.id === candidate.defaultCourtId)) {
+      showToast("Select an available default court.");
+      return;
+    }
+    state.settings = validation.settings;
+    saveState();
+    render();
+    showToast("Session defaults saved.");
+    return;
+  }
 
   if (formType === "login") {
     const email = String(data.email || "").trim();
@@ -1158,17 +1251,18 @@ async function handleSubmit(event) {
       syncSessionPayments(existingSession);
       showToast("Session updated.");
     } else {
-      session = {
-        id: createId("session"),
-        ...sessionData,
-        pollStatus: "Draft",
-        notes: "",
-        responses: [],
-        payments: {},
-        sent: {}
-      };
-      state.sessions.push(session);
-      showToast("Session created.");
+      const creation = buildNewSessionRecords(
+        { ...sessionData, pollStatus: "Draft" },
+        { frequency: data.recurrence || "none", endDate: data.recurrenceEndDate || "" },
+        state.sessions
+      );
+      if (!creation.valid) {
+        showToast(creation.message);
+        return;
+      }
+      state.sessions.push(...creation.records);
+      session = creation.records[0];
+      showToast(creation.records.length === 1 ? "Session created." : `${creation.records.length} weekly sessions created.`);
     }
     activeSessionId = session.id;
     uiState.sessionWeekStart = weekStartIso(session.date);

@@ -300,16 +300,17 @@ function executeConfirmedDelete(target) {
     if (!session) return false;
     if (sessionHasFinancialHistory(session)) {
       modal = null;
-      showToast("This session has retained financial history and cannot be deleted.");
+      showToast(`This session has retained financial history and cannot be ${session.recurrence ? "cancelled" : "deleted"}.`);
       return false;
     }
+    const recurring = Boolean(normalizeSessionRecurrence(session.recurrence));
     state.sessions = state.sessions.filter((item) => item.id !== session.id);
     if (activeSessionId === session.id) {
       activeSessionId = sortSessions()[0]?.id || null;
     }
     modal = null;
     saveState();
-    showToast("Session deleted.");
+    showToast(recurring ? "Session cancelled. Other weekly sessions were not changed." : "Session deleted.");
     return true;
   }
   if (deleteType === "court") {

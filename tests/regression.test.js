@@ -1092,6 +1092,199 @@ test("session date change updates modal type and time defaults", () => {
   assert.deepEqual(result, { type: "Saturday", startTime: "18:00", endTime: "20:00", expectedPlayers: 12, waterCost: 6, perPersonAmount: 22 });
 });
 
+test("session defaults validate every configurable schedule and amount", () => {
+  const context = createAppContext();
+
+  assert.equal(run(context, "validateSessionSettingsCandidate(emptyState().settings).valid"), true);
+  assert.match(
+    run(context, 'validateSessionSettingsCandidate({ ...emptyState().settings, defaultFridayStartTime: "18:15" }).message'),
+    /30-minute intervals/
+  );
+  assert.match(
+    run(context, "validateSessionSettingsCandidate({ ...emptyState().settings, defaultSaturdayCourts: 0 }).message"),
+    /between 1 and 20/
+  );
+  assert.match(
+    run(context, "validateSessionSettingsCandidate({ ...emptyState().settings, defaultShuttleCost: -1 }).message"),
+    /zero or more/
+  );
+  assert.match(
+    run(context, "validateSessionSettingsCandidate({ ...emptyState().settings, defaultRecurrenceWeeks: 54 }).message"),
+    /between 1 and 53/
+  );
+});
+
+test("session defaults drive the complete new-session form", () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-07-03T10:00:00");
+  setAppState(
+    context,
+    baseFixture({
+      courts: [court("court-a", "Alpha", "Area", 45), court("court-b", "Bravo", "Area", 60)],
+      settings: {
+        defaultSessionWeekday: 6,
+        defaultCourtId: "court-b",
+        defaultPlayersPerCourt: 5,
+        defaultShuttleCost: 7,
+        defaultWaterCostPerTwoCourts: 4,
+        defaultSaturdayStartTime: "18:30",
+        defaultSaturdayEndTime: "20:30",
+        defaultSaturdayCourts: 3,
+        autoCalculateCourtFee: false,
+        defaultCourtFee: 180,
+        autoCalculateWaterCost: false,
+        defaultWaterCost: 9,
+        autoCalculatePerPersonRate: false,
+        defaultPerPersonAmount: 16,
+        defaultRecurrence: "weekly",
+        defaultRecurrenceWeeks: 5
+      }
+    })
+  );
+
+  const html = run(context, "renderSessionModal()");
+  assert.match(html, /type="date"[^>]*value="2026-07-04"/);
+  assert.match(html, /<option value="Saturday" selected>Saturday<\/option>/);
+  assert.match(html, /<option value="court-b" selected>Bravo<\/option>/);
+  assert.match(html, /name="slotStartTime"[^>]*value="18:30"/);
+  assert.match(html, /name="slotEndTime"[^>]*value="20:30"/);
+  assert.match(html, /name="slotCourts"[^>]*value="3"/);
+  assert.match(html, /name="expectedPlayers"[^>]*value="15"/);
+  assert.match(html, /name="totalPaid"[^>]*value="180"[^>]*data-manual="true"/);
+  assert.match(html, /name="waterCost"[^>]*value="9"[^>]*data-manual="true"/);
+  assert.match(html, /name="shuttleCost"[^>]*value="7"/);
+  assert.match(html, /name="perPersonAmount"[^>]*value="16"[^>]*data-manual="true"/);
+  assert.match(html, /name="recurrence" value="weekly"[^>]*checked/);
+  assert.match(html, /name="recurrenceEndDate"[^>]*value="2026-08-01"/);
+  assert.match(html, /data-session-recurrence-summary>5 sessions/);
+  assert.match(html, />Create Sessions<\/button>/);
+
+  const settingsHtml = run(context, "renderSessionDefaultsSettings()");
+  assert.match(settingsHtml, /data-form="session-defaults"/);
+  assert.match(settingsHtml, /name="defaultSessionWeekday"/);
+  assert.match(settingsHtml, /name="defaultCourtId"/);
+  assert.match(settingsHtml, /name="defaultSaturdayStartTime"/);
+  assert.match(settingsHtml, /name="defaultRecurrenceWeeks"/);
+  assert.match(settingsHtml, /Save Session Defaults/);
+});
+
+test("weekly recurrence builds an inclusive bounded date plan", () => {
+  const context = createAppContext();
+
+  assert.deepEqual(jsonValue(context, 'buildSessionRecurrencePlan("2026-07-18", "weekly", "2026-08-15").dates'), [
+    "2026-07-18",
+    "2026-07-25",
+    "2026-08-01",
+    "2026-08-08",
+    "2026-08-15"
+  ]);
+  assert.equal(run(context, 'weeklyRecurrenceEndDate("2026-07-18", 5)'), "2026-08-15");
+  assert.match(
+    run(context, 'buildSessionRecurrencePlan("2026-07-18", "weekly", "2026-07-17").message'),
+    /cannot be before/
+  );
+  assert.match(
+    run(context, 'buildSessionRecurrencePlan("2026-07-18", "weekly", addDaysIso("2026-07-18", 53 * 7)).message'),
+    /at most 53/
+  );
+});
+
+test("weekly creation produces independent sessions and blocks partial duplicate batches", () => {
+  const context = createAppContext();
+  setAppState(context, baseFixture());
+  context.__recurrenceBase = {
+    type: "Saturday",
+    date: "2026-07-18",
+    startTime: "18:00",
+    endTime: "20:00",
+    courtId: "court-1",
+    courtSlots: [{ startTime: "18:00", endTime: "20:00", courts: 3 }],
+    plannedCourts: 3,
+    bookedCourts: 3,
+    playersPerCourt: 6,
+    expectedPlayers: 18,
+    totalPaid: 300,
+    shuttleCost: 5,
+    waterCost: 12,
+    perPersonAmount: 18,
+    stage: "Draft",
+    bookingStatus: "Pre-booked",
+    pollStatus: "Draft"
+  };
+  const creation = jsonValue(
+    context,
+    '__creation = buildNewSessionRecords(__recurrenceBase, { frequency: "weekly", endDate: "2026-08-15" }, [])'
+  );
+
+  assert.equal(creation.valid, true);
+  assert.equal(creation.records.length, 5);
+  assert.equal(new Set(creation.records.map((session) => session.id)).size, 5);
+  assert.equal(new Set(creation.records.map((session) => session.recurrence.id)).size, 1);
+  assert.deepEqual(creation.records.map((session) => session.recurrence.sequence), [1, 2, 3, 4, 5]);
+  assert.ok(creation.records.every((session) => session.groupId === "group-saturday"));
+  assert.deepEqual(
+    jsonValue(context, "jsonFromFirestoreValue(firestoreValueFromJson(__creation.records[0].recurrence))"),
+    creation.records[0].recurrence
+  );
+
+  run(context, "__creation.records[1].courtSlots[0].courts = 2; __creation.records[1].totalPaid = 200");
+  assert.equal(run(context, "__creation.records[0].courtSlots[0].courts"), 3);
+  assert.equal(run(context, "__creation.records[0].totalPaid"), 300);
+  assert.notEqual(run(context, "__creation.records[0].responses === __creation.records[1].responses"), true);
+
+  context.__existingConflict = { ...context.__recurrenceBase, date: "2026-08-01" };
+  const duplicate = jsonValue(
+    context,
+    '__duplicate = buildNewSessionRecords(__recurrenceBase, { frequency: "weekly", endDate: "2026-08-15" }, [__existingConflict])'
+  );
+  assert.equal(duplicate.valid, false);
+  assert.equal(duplicate.records.length, 0);
+  assert.match(duplicate.message, /No sessions were created/);
+});
+
+test("one recurring occurrence can be edited or cancelled without changing the others", () => {
+  const context = createAppContext();
+  setAppState(context, baseFixture());
+  context.__recurrenceBase = {
+    type: "Saturday",
+    date: "2026-07-18",
+    startTime: "18:00",
+    endTime: "20:00",
+    courtId: "court-1",
+    courtSlots: [{ startTime: "18:00", endTime: "20:00", courts: 3 }],
+    plannedCourts: 3,
+    bookedCourts: 3,
+    playersPerCourt: 6,
+    expectedPlayers: 18,
+    totalPaid: 300,
+    shuttleCost: 5,
+    waterCost: 12,
+    perPersonAmount: 18,
+    stage: "Draft",
+    bookingStatus: "Pre-booked",
+    pollStatus: "Draft"
+  };
+  const records = jsonValue(
+    context,
+    'buildNewSessionRecords(__recurrenceBase, { frequency: "weekly", endDate: "2026-08-15" }, []).records'
+  );
+  setAppState(context, baseFixture({ sessions: records }));
+  const cancelledId = records[1].id;
+  const retainedIds = records.filter((session) => session.id !== cancelledId).map((session) => session.id);
+
+  run(context, `state.sessions.find((session) => session.id === ${JSON.stringify(records[2].id)}).totalPaid = 240`);
+  assert.equal(run(context, `state.sessions.find((session) => session.id === ${JSON.stringify(records[0].id)}).totalPaid`), 300);
+  const editHtml = run(context, `renderSessionModal(${JSON.stringify(records[2].id)})`);
+  assert.doesNotMatch(editHtml, /data-session-recurrence-source/);
+
+  run(context, "showToast = () => {};");
+  context.__deleteTarget = { dataset: { deleteType: "session", session: cancelledId } };
+  assert.equal(run(context, "executeConfirmedDelete(__deleteTarget)"), true);
+  assert.equal(run(context, "state.sessions.length"), 4);
+  assert.equal(run(context, `Boolean(state.sessions.find((session) => session.id === ${JSON.stringify(cancelledId)}))`), false);
+  assert.deepEqual(jsonValue(context, "state.sessions.map((session) => session.id)"), retainedIds);
+});
+
 test("message court placeholder uses venue suffix after at-sign with area", () => {
   const context = createAppContext();
   setAppState(
@@ -3617,6 +3810,29 @@ test("payments page shows payment groups before player balances", () => {
   assert.ok(html.indexOf("<h2>Payment Groups</h2>") < html.indexOf("<h2>Player Balances</h2>"));
 });
 
+test("payment group card keeps chip below name and every payment control in one row", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Kuberan"), player("member", "Kalai")],
+      paymentGroups: [{ id: "group-kuberan", name: "Kuberan", payerId: "payer", playerIds: ["payer", "member"], guests: [], active: true }]
+    })
+  );
+
+  const html = run(context, 'renderPaymentGroupCard(getPaymentGroup("group-kuberan"))');
+  const title = html.match(/<div class="payment-group-title-line">[\s\S]*?<\/div>/)?.[0] || "";
+  const actions = html.match(/<div class="payment-group-actions">[\s\S]*?<\/div>/)?.[0] || "";
+  assert.match(title, /<h3[^>]*>Kuberan<\/h3>[\s\S]*<span class="badge/);
+  assert.match(actions, /name="amountPaid"/);
+  assert.equal((actions.match(/<button/g) || []).length, 5);
+  assert.equal((html.match(/name="amountPaid"/g) || []).length, 1);
+  assert.doesNotMatch(html, /payment-group-payment-line/);
+  const amountInput = actions.match(/<input[^>]*name="amountPaid"[^>]*>/)?.[0] || "";
+  assert.match(amountInput, /placeholder="0"/);
+  assert.doesNotMatch(amountInput, /\svalue=/);
+});
+
 test("payment group guest draft supports add, rename, and remove", () => {
   const context = createAppContext();
   setAppState(context, baseFixture({ players: [player("payer", "Yogesh")] }));
@@ -3775,7 +3991,7 @@ test("court action icons keep fixed same-size row controls", () => {
   assert.match(css, /@media \(max-width:\s*640px\)[\s\S]*?\.court-card-actions\s*\{[^}]*grid-template-columns:\s*repeat\(7,\s*40px\)/);
 });
 
-test("shared icon action buttons keep square dimensions", () => {
+test("shared icon actions and compact payment group controls keep stable dimensions", () => {
   const css = fs.readFileSync(path.join(ROOT, "styles.css"), "utf8");
   const block = (pattern) => css.match(pattern)?.[0] || "";
   const assertSquare = (rules, size) => {
@@ -3791,6 +4007,7 @@ test("shared icon action buttons keep square dimensions", () => {
   const paymentGroupActionButton = block(/\.payment-group-actions \.btn\.icon-only\s*\{[^}]+\}/);
   const mobilePaymentGroupActions = block(/@media \(max-width:\s*640px\)[\s\S]*?\.payment-group-actions\s*\{[^}]+\}/);
   const mobilePaymentGroupActionButton = block(/@media \(max-width:\s*640px\)[\s\S]*?\.payment-group-actions \.btn\.icon-only\s*\{[^}]+\}/);
+  const narrowPaymentGroupLayout = block(/@media \(max-width:\s*374px\)[\s\S]*?\.payment-group-header\s*\{[^}]+\}/);
   const mobileActivityButtons = block(/@media \(max-width:\s*640px\)[\s\S]*?\.activity-row-actions \.btn\.icon-only\s*\{[^}]+\}/);
   const shuttleSpentActions = block(/\.shuttle-spent-actions\s*\{[^}]+\}/);
   const mobileShuttleSpentActions = block(/@media \(max-width:\s*640px\)[\s\S]*?\.shuttle-spent-actions\s*\{[^}]+\}/);
@@ -3813,19 +4030,22 @@ test("shared icon action buttons keep square dimensions", () => {
   assertSquare(paymentStatusButton, 40);
   assert.match(paymentStatusButton, /flex:\s*0 0 40px/);
   assertSquare(block(/\.player-card-actions \.btn\.icon-only\s*\{[^}]+\}/), 44);
-  assert.match(paymentGroupHeader, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*clamp\(180px,\s*25vw,\s*236px\)/);
-  assert.match(paymentGroupHeader, /"title actions"[\s\S]*"payment payment"[\s\S]*"details details"/);
+  assert.match(paymentGroupHeader, /grid-template-columns:\s*minmax\(96px,\s*1fr\)\s*clamp\(214px,\s*28vw,\s*274px\)/);
+  assert.match(paymentGroupHeader, /"title actions"[\s\S]*"details details"/);
+  assert.doesNotMatch(paymentGroupHeader, /"payment payment"/);
   assert.match(paymentGroupActions, /grid-area:\s*actions/);
-  assert.match(paymentGroupActions, /grid-template-columns:\s*repeat\(5,\s*minmax\(32px,\s*1fr\)\)/);
+  assert.match(paymentGroupActions, /grid-template-columns:\s*minmax\(44px,\s*1\.3fr\)\s*repeat\(5,\s*minmax\(0,\s*1fr\)\)/);
   assert.match(paymentGroupActionButton, /width:\s*100%/);
   assert.match(paymentGroupActionButton, /height:\s*auto/);
   assert.match(paymentGroupActionButton, /min-width:\s*0/);
   assert.match(paymentGroupActionButton, /min-height:\s*0/);
   assert.match(paymentGroupActionButton, /aspect-ratio:\s*1/);
-  assert.match(mobilePaymentGroupActions, /grid-template-columns:\s*repeat\(5,\s*minmax\(32px,\s*1fr\)\)/);
+  assert.match(mobilePaymentGroupActions, /grid-template-columns:\s*minmax\(44px,\s*1\.3fr\)\s*repeat\(5,\s*minmax\(0,\s*1fr\)\)/);
   assert.match(mobilePaymentGroupActionButton, /width:\s*100%/);
   assert.match(mobilePaymentGroupActionButton, /height:\s*auto/);
   assert.match(mobilePaymentGroupActionButton, /aspect-ratio:\s*1/);
+  assert.match(narrowPaymentGroupLayout, /grid-template-columns:\s*minmax\(68px,\s*1fr\)\s*196px/);
+  assert.match(narrowPaymentGroupLayout, /column-gap:\s*4px/);
   assert.match(shuttleSpentActions, /grid-template-columns:\s*repeat\(2,\s*44px\)/);
   assert.match(shuttleSpentActions, /justify-self:\s*end/);
   assert.match(mobileShuttleSpentActions, /grid-template-columns:\s*repeat\(2,\s*40px\)/);
