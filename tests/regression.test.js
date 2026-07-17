@@ -4035,11 +4035,13 @@ test("shared icon actions and compact payment group controls keep stable dimensi
   assert.doesNotMatch(paymentGroupHeader, /"payment payment"/);
   assert.match(paymentGroupActions, /grid-area:\s*actions/);
   assert.match(paymentGroupActions, /grid-template-columns:\s*minmax\(44px,\s*1\.3fr\)\s*repeat\(5,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(paymentGroupActions, /align-items:\s*start/);
   assert.match(paymentGroupActionButton, /width:\s*100%/);
   assert.match(paymentGroupActionButton, /height:\s*auto/);
   assert.match(paymentGroupActionButton, /min-width:\s*0/);
   assert.match(paymentGroupActionButton, /min-height:\s*0/);
   assert.match(paymentGroupActionButton, /aspect-ratio:\s*1/);
+  assert.match(paymentGroupActionButton, /align-self:\s*start/);
   assert.match(mobilePaymentGroupActions, /grid-template-columns:\s*minmax\(44px,\s*1\.3fr\)\s*repeat\(5,\s*minmax\(0,\s*1fr\)\)/);
   assert.match(mobilePaymentGroupActionButton, /width:\s*100%/);
   assert.match(mobilePaymentGroupActionButton, /height:\s*auto/);
