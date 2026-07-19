@@ -745,7 +745,7 @@ function renderPlayerBalanceRow(player) {
           <div class="player-balance-title-line">
             <h3 class="row-title">${escapeHtml(playerLabel)}</h3>
             <div class="player-balance-chips" aria-label="Payment summary for ${escapeAttr(playerLabel)}">
-              <span class="badge green">Covered ${currency(covered)}</span>
+              <span class="badge green">Settled ${currency(covered)}</span>
               <span class="player-balance-chip-pair">
                 <span class="badge ${due ? "gold" : "green"}">${due ? `Due ${currency(due)}` : "Clear"}</span>
                 ${remainingCredit > 0 ? `<span class="badge teal">Credit ${currency(remainingCredit)}</span>` : ""}

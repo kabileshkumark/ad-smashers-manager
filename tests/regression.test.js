@@ -2861,7 +2861,7 @@ test("player balance rows hide zero credit and label positive credit", () => {
 
   const html = run(context, 'renderPlayerBalanceRow(getPlayer("p1"))');
   assert.match(html, /player-balance-title-line/);
-  assert.match(html, /Covered 13 AED/);
+  assert.match(html, /Settled 13 AED/);
   assert.match(html, /Due 7 AED/);
   assert.doesNotMatch(html, /Credit/);
   assert.doesNotMatch(html, /Credit 0 AED/);
