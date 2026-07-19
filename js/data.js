@@ -174,7 +174,7 @@ function migrateState(data = {}, options = {}) {
   migrated.players = migrated.players.map((player) => normalizePlayer(player));
   migrated.sessions = migrated.sessions.map((session) => normalizeSession(session, migrated.settings));
   migrated.sessions.forEach((session) => syncSessionPayments(session, migrated.players, migrated.settings));
-  migrated.activities = migrated.activities.map((activity) => normalizeActivity(activity, migrated.players));
+  migrated.activities = migrated.activities.map((activity) => normalizeActivity(activity, migrated.players, migrated.settings));
   migrated.paymentGroups = (migrated.paymentGroups || [])
     .map((group) => normalizePaymentGroup(group, migrated.players))
     .filter((group) => group.playerIds.length);
@@ -383,19 +383,45 @@ function normalizeSession(session, settings = state?.settings || {}) {
   return normalized;
 }
 
-function normalizeActivity(activity, players = state?.players || []) {
+function normalizeActivity(activity, players = state?.players || [], settings = state?.settings || {}) {
   const activeIds = new Set(players.map((player) => player.id));
   const playerIds = uniqueIds(activity.playerIds || Object.keys(activity.shares || {})).filter((id) => activeIds.has(id));
-  return syncActivityShares({
+  const contributionTotals = new Map();
+  const rawContributions = Array.isArray(activity.contributions) && activity.contributions.length
+    ? activity.contributions
+    : activity.paidById ? [{ playerId: activity.paidById, amount: activity.totalPaid }] : [];
+  rawContributions.forEach((contribution) => {
+    const playerId = String(contribution?.playerId || "");
+    const amount = ledgerMoney(contribution?.amount);
+    if (!activeIds.has(playerId) || !Number.isFinite(amount) || amount <= 0) return;
+    contributionTotals.set(playerId, ledgerMoney((contributionTotals.get(playerId) || 0) + amount));
+  });
+  const contributions = [...contributionTotals].map(([playerId, amount]) => ({ playerId, amount }));
+  const paidById = contributions[0]?.playerId || (activeIds.has(activity.paidById) ? activity.paidById : "");
+  const requestedOwnerId = String(activity.settlementOwnerId || settings.organizerPlayerId || paidById || "");
+  const normalized = {
     id: activity.id || createId("activity"),
     name: activity.name || "Activity",
     date: activity.date || new Date().toISOString().slice(0, 10),
-    totalPaid: Number(activity.totalPaid || 0),
-    paidById: activeIds.has(activity.paidById) ? activity.paidById : "",
+    totalPaid: ledgerMoney(activity.totalPaid),
+    paidById,
+    contributions,
+    settlementOwnerId: activeIds.has(requestedOwnerId) ? requestedOwnerId : paidById,
     playerIds,
+    splitMode: normalizeActivitySplitMode(activity.splitMode),
+    splitValues: Object.fromEntries(
+      Object.entries(activity.splitValues || {})
+        .filter(([playerId]) => playerIds.includes(playerId))
+        .map(([playerId, value]) => [playerId, Number(value)])
+    ),
     notes: String(activity.notes || "").trim(),
     shares: activity.shares || {}
-  });
+  };
+  if (!activitySplitValidation(normalized).valid) {
+    normalized.splitMode = "equal";
+    normalized.splitValues = {};
+  }
+  return syncActivityShares(normalized);
 }
 
 function normalizePaymentGroup(group, players = state?.players || []) {
@@ -838,14 +864,28 @@ function captureActivityDraft(form) {
   if (!form) return activityDraft;
   const formData = new FormData(form);
   const activeIds = new Set(state.players.filter((player) => player.active !== false).map((player) => player.id));
-  const paidById = String(formData.get("paidById") || "");
+  const contributionPlayerIds = formData.getAll("contributionPlayerId").map((value) => String(value || ""));
+  const contributionAmounts = formData.getAll("contributionAmount").map((value) => String(value || ""));
+  const fallbackPaidById = String(formData.get("paidById") || "");
+  const contributions = contributionPlayerIds.length
+    ? contributionPlayerIds.map((playerId, index) => ({ playerId: activeIds.has(playerId) ? playerId : "", amount: contributionAmounts[index] || "" }))
+    : fallbackPaidById ? [{ playerId: fallbackPaidById, amount: String(formData.get("totalPaid") || "") }] : [];
+  const splitPlayerIds = formData.getAll("splitPlayerId").map((value) => String(value || ""));
+  const splitValueEntries = formData.getAll("splitValue");
+  const splitValues = { ...(activityDraft.splitValues || {}) };
+  splitPlayerIds.forEach((playerId, index) => {
+    if (activeIds.has(playerId)) splitValues[playerId] = String(splitValueEntries[index] ?? "");
+  });
   activityDraft = {
     id: String(formData.get("id") || activityDraft.id || ""),
     name: String(formData.get("name") || ""),
     date: String(formData.get("date") || new Date().toISOString().slice(0, 10)),
     totalPaid: String(formData.get("totalPaid") || ""),
-    paidById: activeIds.has(paidById) ? paidById : "",
+    paidById: contributions.find((contribution) => contribution.playerId)?.playerId || "",
+    contributions,
     playerIds: uniqueIds(formData.getAll("playerIds")).filter((id) => activeIds.has(id)),
+    splitMode: normalizeActivitySplitMode(formData.get("splitMode") || activityDraft.splitMode),
+    splitValues,
     notes: String(formData.get("notes") || ""),
     shuttlePurchase: formData.get("shuttlePurchase") === "true" || Boolean(activityDraft.shuttlePurchase)
   };

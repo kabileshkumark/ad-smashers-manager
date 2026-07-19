@@ -1507,6 +1507,128 @@ img {
   grid-column: 1 / -1;
 }
 
+.activity-form-section {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 8px;
+  min-width: 0;
+}
+
+.activity-form-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  color: var(--ink-700);
+  font-weight: 850;
+}
+
+.activity-form-section-heading > span {
+  white-space: nowrap;
+}
+
+.activity-owner-value {
+  display: flex;
+  align-items: center;
+  min-height: var(--modal-control-height);
+  padding: 0 var(--modal-control-padding-x);
+  border: 1px solid var(--line);
+  border-radius: var(--modal-control-radius);
+  color: var(--ink-700);
+  background: var(--surface-soft);
+  font-weight: 800;
+}
+
+.activity-contribution-list,
+.activity-split-list,
+.activity-settlement-list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.activity-contribution-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(72px, 0.65fr) 44px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.activity-contribution-row .compact-field,
+.activity-contribution-row .select,
+.activity-contribution-row .input {
+  min-width: 0;
+  width: 100%;
+}
+
+.activity-contribution-row .select,
+.activity-contribution-row .input {
+  height: 44px;
+  min-height: 44px;
+}
+
+.segmented-control.activity-split-modes {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.segmented-control .activity-split-mode-icon {
+  min-height: 42px;
+  padding: 0;
+}
+
+.activity-split-mode-icon .icon {
+  width: 21px;
+  height: 21px;
+}
+
+.activity-split-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(112px, 0.62fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 48px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.activity-split-row > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-split-preview > span {
+  justify-self: end;
+  font-weight: 850;
+}
+
+.activity-split-input-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.activity-split-input-wrap .input {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  text-align: right;
+}
+
+.activity-split-input-wrap small {
+  color: var(--ink-500);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
 .activity-player-control {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr);
@@ -1561,6 +1683,13 @@ img {
   flex: 0 1 auto;
 }
 
+.activity-status-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
 .activity-row-actions {
   display: grid;
   grid-template-columns: repeat(3, 44px);
@@ -1599,6 +1728,36 @@ img {
   color: #697775;
   font-weight: 750;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.activity-settlement-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.activity-settlement-row > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.activity-settlement-row strong,
+.activity-settlement-row span {
+  min-width: 0;
+}
+
+.activity-settlement-row > div > span {
+  color: var(--ink-500);
+  font-size: 0.8rem;
+  font-weight: 750;
   overflow-wrap: anywhere;
 }
 
@@ -3901,6 +4060,10 @@ body.is-scrolling-content .bottom-nav {
 }
 
 @media (max-width: 374px) {
+  .activity-modal .session-form-row.two {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .transaction-choice-actions {
     gap: 6px;
   }

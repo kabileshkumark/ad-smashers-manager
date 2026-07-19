@@ -44,11 +44,12 @@ function advanceSearchText(player) {
 
 function activitySearchText(activity) {
   const playerNames = (activity.playerIds || []).map((id) => getPlayerName(id)).join(" ");
+  const payerNames = activityPayerIds(activity).map((id) => getPlayerName(id)).join(" ");
   return [
     activity.name,
     activity.notes,
     formatDate(activity.date),
-    getPlayerName(activity.paidById),
+    payerNames,
     playerNames,
     currency(activity.totalPaid)
   ].join(" ");
@@ -283,6 +284,9 @@ function renderPaymentGroupCard(group) {
   const memberCount = paymentGroupMemberCount(group);
   const payerName = group.payerId ? getPlayerName(group.payerId) : "Not set";
   const historyItems = paymentGroupTransactions(group.id);
+  const hasCoverageHistory = summary.advanceApplied > 0
+    || summary.creditApplied > 0
+    || Number(group.payerId ? playerCreditAccountSummary(group.payerId).total : 0) > 0;
   const balanceLabel = balance > 0 ? `${currency(balance)} due` : "Clear";
   const balanceClass = balance > 0 ? "gold" : "green";
   return `
@@ -297,8 +301,6 @@ function renderPaymentGroupCard(group) {
           <div class="payment-group-details">
             <p class="row-subtitle">Paid by ${escapeHtml(payerName)} - ${memberCount} members</p>
             <p class="row-subtitle payment-group-members">${escapeHtml(paymentGroupMemberNames(group))}</p>
-            ${summary.advanceApplied > 0 ? `<p class="row-subtitle">${currency(summary.advanceApplied)} Advance applied from ${escapeHtml(payerName)}</p>` : ""}
-            ${summary.creditApplied > 0 ? `<p class="row-subtitle">${currency(summary.creditApplied)} Credit applied from ${escapeHtml(payerName)}</p>` : ""}
           </div>
         </div>
         <div class="payment-group-actions">
@@ -308,7 +310,7 @@ function renderPaymentGroupCard(group) {
           </label>
           <button class="btn primary icon-only" type="submit" ${balance > 0 ? "" : "disabled"} aria-label="Apply group payment for ${escapeAttr(group.name || "group")}" title="Apply group payment">${icon("wallet")}</button>
           <button class="btn icon-only" type="button" data-action="open-payment-group-copy" data-payment-group="${escapeAttr(group.id)}" aria-label="Copy payment details for ${escapeAttr(group.name || "group")}" title="Copy Payment Details">${icon("copy")}</button>
-          <button class="btn icon-only" type="button" data-action="open-group-payment-history" data-payment-group="${escapeAttr(group.id)}" ${historyItems.length ? "" : "disabled"} aria-label="Payment history for ${escapeAttr(group.name || "group")}" title="Payment history">${icon("history")}</button>
+          <button class="btn icon-only" type="button" data-action="open-group-payment-history" data-payment-group="${escapeAttr(group.id)}" ${historyItems.length || hasCoverageHistory ? "" : "disabled"} aria-label="Payment history for ${escapeAttr(group.name || "group")}" title="Payment history">${icon("history")}</button>
           <button class="btn icon-only" type="button" data-action="edit-payment-group" data-payment-group="${escapeAttr(group.id)}" aria-label="Edit ${escapeAttr(group.name || "group")}" title="Edit">${icon("edit")}</button>
           <button class="btn icon-only danger" type="button" data-action="delete-payment-group" data-payment-group="${escapeAttr(group.id)}" aria-label="Delete ${escapeAttr(group.name || "group")}" title="Delete">${icon("trash")}</button>
         </div>
@@ -483,6 +485,7 @@ function renderAdvanceDeductionRow(deduction) {
 function renderGroupPaymentHistoryModal(groupId = "") {
   const group = getPaymentGroup(groupId);
   const transactions = paymentGroupTransactions(groupId);
+  const coverageHistory = renderPaymentGroupCoverageHistory(group);
   return `
     <div class="modal-backdrop" data-modal-backdrop>
       <div class="modal-card payment-history-modal" role="dialog" aria-modal="true" aria-labelledby="group-payment-history-modal-title">
@@ -494,14 +497,39 @@ function renderGroupPaymentHistoryModal(groupId = "") {
           <button class="btn icon-button" type="button" data-action="close-modal" aria-label="Close">X</button>
         </div>
         <div class="payment-history-list">
-          ${
-            transactions.length
-              ? transactions.map((transaction) => renderGroupPaymentHistoryRow(transaction)).join("")
-              : `<div class="empty">No recorded group payments yet.</div>`
-          }
+          ${coverageHistory}
+          ${transactions.length ? transactions.map((transaction) => renderGroupPaymentHistoryRow(transaction)).join("") : coverageHistory ? "" : `<div class="empty">No recorded group payments yet.</div>`}
         </div>
       </div>
     </div>
+  `;
+}
+
+function renderPaymentGroupCoverageHistory(group) {
+  if (!group) return "";
+  const summary = paymentGroupCoverageSummary(group);
+  const payerName = group.payerId ? getPlayerName(group.payerId) : "Not set";
+  const creditAccount = group.payerId ? playerCreditAccountSummary(group.payerId) : null;
+  const details = [];
+  if (summary.advanceApplied > 0) {
+    details.push(`${currency(summary.advanceApplied)} Advance applied from ${payerName}`);
+  }
+  if (summary.creditApplied > 0) {
+    details.push(`${currency(summary.creditApplied)} of ${payerName} Credit applied to group members`);
+  }
+  if (creditAccount?.total > 0) {
+    details.push(`Credit owned by ${payerName}: ${currency(creditAccount.total)} total; ${currency(creditAccount.ownApplied)} used for ${payerName}; ${currency(creditAccount.groupApplied)} used for group members; ${currency(creditAccount.remaining)} remaining`);
+  }
+  if (!details.length) return "";
+  return `
+    <article class="row-card payment-history-item payment-group-coverage-history">
+      <div class="row-main">
+        <div>
+          <h3 class="row-title">Current Allocation</h3>
+          ${details.map((detail) => `<p class="row-subtitle">${escapeHtml(detail)}</p>`).join("")}
+        </div>
+      </div>
+    </article>
   `;
 }
 
@@ -545,6 +573,9 @@ function renderGroupPaymentHistoryRow(transaction) {
 function renderActivityModal() {
   const players = activePlayersAlphabetical();
   const isEditing = Boolean(activityDraft.id);
+  const ownerId = isEditing
+    ? activitySettlementOwnerId((state.activities || []).find((activity) => activity.id === activityDraft.id))
+    : state.settings?.organizerPlayerId || "";
   return `
     <div class="modal-backdrop" data-modal-backdrop>
       <form class="modal-card activity-modal" data-form="activity" role="dialog" aria-modal="true" aria-labelledby="activity-modal-title">
@@ -563,9 +594,14 @@ function renderActivityModal() {
           </div>
           <div class="session-form-row two">
             ${numberField("totalPaid", "Total Paid", activityDraft.totalPaid, 0, "activity")}
-            ${renderActivityPaidByField(players)}
+            <div class="field activity-owner-field">
+              <span>Settlement Owner</span>
+              <div class="activity-owner-value">${ownerId ? escapeHtml(getPlayerName(ownerId)) : "Select Organizer in Settings"}</div>
+            </div>
           </div>
+          ${renderActivityContributions(players)}
           ${renderActivityPlayerPicker(players)}
+          ${renderActivitySplitEditor()}
           <label class="field activity-notes-field">
             <span>Notes</span>
             <textarea class="textarea" name="notes">${escapeHtml(activityDraft.notes || "")}</textarea>
@@ -580,15 +616,105 @@ function renderActivityModal() {
   `;
 }
 
-function renderActivityPaidByField(players) {
+function renderActivityContributions(players) {
+  const contributions = activityDraft.contributions?.length
+    ? activityDraft.contributions
+    : activityDraft.paidById
+      ? [{ playerId: activityDraft.paidById, amount: activityDraft.totalPaid || "" }]
+      : [{ playerId: "", amount: "" }];
+  const selectedIds = contributions.map((contribution) => contribution.playerId).filter(Boolean);
+  const contributionTotal = contributions.reduce((total, contribution) => total + Number(contribution.amount || 0), 0);
   return `
-    <label class="field">
-      <span>Paid by</span>
-      <select class="select" name="paidById" ${players.length ? "" : "disabled"}>
-        <option value="" ${activityDraft.paidById ? "" : "selected"}>${players.length ? "Select payer" : "Add players first"}</option>
-        ${players.map((player) => `<option value="${escapeAttr(player.id)}" ${player.id === activityDraft.paidById ? "selected" : ""}>${escapeHtml(player.name || player.displayName || "Player")}</option>`).join("")}
-      </select>
-    </label>
+    <section class="activity-form-section activity-contributions-section">
+      <div class="activity-form-section-heading">
+        <span>Paid by</span>
+        <div class="toolbar nowrap">
+          <span class="badge teal" data-activity-contribution-total>${currency(contributionTotal)}</span>
+          <button class="btn icon-only" type="button" data-action="activity-add-contribution" ${players.length ? "" : "disabled"} aria-label="Add payer" title="Add Payer">${icon("plus")}</button>
+        </div>
+      </div>
+      <div class="activity-contribution-list">
+        ${contributions.map((contribution, index) => `
+          <div class="activity-contribution-row">
+            <label class="field compact-field">
+              <span class="visually-hidden">Payer ${index + 1}</span>
+              <select class="select" name="contributionPlayerId" ${players.length ? "" : "disabled"} aria-label="Payer ${index + 1}">
+                <option value="" ${contribution.playerId ? "" : "selected"}>Select payer</option>
+                ${players.map((player) => {
+                  const isSelected = player.id === contribution.playerId;
+                  const usedElsewhere = selectedIds.includes(player.id) && !isSelected;
+                  return `<option value="${escapeAttr(player.id)}" ${isSelected ? "selected" : ""} ${usedElsewhere ? "disabled" : ""}>${escapeHtml(player.name || player.displayName || "Player")}</option>`;
+                }).join("")}
+              </select>
+            </label>
+            <label class="field compact-field activity-contribution-amount">
+              <span class="visually-hidden">Amount paid by payer ${index + 1}</span>
+              <input class="input" type="number" name="contributionAmount" min="0" step="0.01" inputmode="decimal" value="${escapeAttr(contribution.amount ?? "")}" placeholder="0" aria-label="Amount paid by payer ${index + 1}" />
+            </label>
+            <button class="btn icon-only danger" type="button" data-action="activity-remove-contribution" data-contribution-index="${index}" ${contributions.length > 1 ? "" : "disabled"} aria-label="Remove payer ${index + 1}" title="Remove Payer">${icon("trash")}</button>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderActivitySplitEditor() {
+  const mode = normalizeActivitySplitMode(activityDraft.splitMode);
+  const playerIds = uniqueIds(activityDraft.playerIds || []);
+  const splitValues = activityDraft.splitValues || {};
+  const previewActivity = {
+    totalPaid: Number(activityDraft.totalPaid || 0),
+    playerIds,
+    splitMode: mode,
+    splitValues,
+    settlementOwnerId: state.settings?.organizerPlayerId || "",
+    shares: {}
+  };
+  const preview = activitySplitValidation(previewActivity);
+  const equalAmounts = mode === "equal" ? preview.amounts : {};
+  const modes = [
+    ["equal", "Equal", "equal"],
+    ["manual", "Manual", "edit"],
+    ["percentage", "Percentage", "percent"],
+    ["shares", "No. of Shares", "shares"]
+  ];
+  return `
+    <section class="activity-form-section activity-split-section">
+      <div class="activity-form-section-heading"><span>Split</span></div>
+      <div class="segmented-control activity-split-modes" role="radiogroup" aria-label="Activity split method">
+        ${modes.map(([value, label, iconName]) => `
+          <label class="activity-split-mode ${mode === value ? "active" : ""}" title="${escapeAttr(label)}">
+            <input type="radio" name="splitMode" value="${value}" ${mode === value ? "checked" : ""} data-activity-split-mode aria-label="${escapeAttr(label)}" />
+            <span class="activity-split-mode-icon">${icon(iconName)}</span>
+          </label>
+        `).join("")}
+      </div>
+      ${playerIds.length ? `
+        <div class="activity-split-list">
+          ${playerIds.map((playerId) => {
+            const playerName = getPlayerName(playerId);
+            if (mode === "equal") {
+              return `<div class="activity-split-row activity-split-preview"><strong>${escapeHtml(playerName)}</strong><span data-activity-split-preview-player="${escapeAttr(playerId)}">${currency(equalAmounts[playerId] || 0)}</span></div>`;
+            }
+            const unit = mode === "manual" ? "AED" : mode === "percentage" ? "%" : "shares";
+            const min = mode === "shares" ? 1 : 0;
+            const step = mode === "shares" ? 1 : 0.01;
+            const max = mode === "percentage" ? ` max="100"` : "";
+            return `
+              <label class="activity-split-row">
+                <strong>${escapeHtml(playerName)}</strong>
+                <span class="activity-split-input-wrap">
+                  <input type="hidden" name="splitPlayerId" value="${escapeAttr(playerId)}" />
+                  <input class="input" type="number" name="splitValue" min="${min}"${max} step="${step}" inputmode="decimal" value="${escapeAttr(splitValues[playerId] ?? "")}" aria-label="${escapeAttr(`${activitySplitLabel({ splitMode: mode })} split for ${playerName}`)}" />
+                  <small>${unit}</small>
+                </span>
+              </label>
+            `;
+          }).join("")}
+        </div>
+      ` : ""}
+    </section>
   `;
 }
 
@@ -735,6 +861,7 @@ function renderPlayerBalanceRow(player) {
   const historyItems = playerPaymentCorrectionItems(player.id);
   const historyTransactions = playerPaymentTransactions(player.id);
   const covered = playerCoveredAmount(player.id);
+  const remainingAdvance = playerRemainingAdvance(player.id);
   const remainingCredit = playerRemainingCredit(player.id);
   const due = playerBalance(player.id);
   return `
@@ -746,6 +873,7 @@ function renderPlayerBalanceRow(player) {
             <h3 class="row-title">${escapeHtml(playerLabel)}</h3>
             <div class="player-balance-chips" aria-label="Payment summary for ${escapeAttr(playerLabel)}">
               <span class="badge green">Settled ${currency(covered)}</span>
+              ${remainingAdvance > 0 ? `<span class="badge blue">Advance ${currency(remainingAdvance)}</span>` : ""}
               <span class="player-balance-chip-pair">
                 <span class="badge ${due ? "gold" : "green"}">${due ? `Due ${currency(due)}` : "Clear"}</span>
                 ${remainingCredit > 0 ? `<span class="badge teal">Credit ${currency(remainingCredit)}</span>` : ""}
@@ -770,16 +898,19 @@ function renderPlayerBalanceRow(player) {
 function renderActivityRow(activity) {
   const participantNames = (activity.playerIds || []).map((id) => getPlayerName(id)).filter(Boolean);
   const participantCount = participantNames.length;
-  const perPerson = participantCount ? Number(activity.totalPaid || 0) / participantCount : 0;
   const outstanding = activityOutstandingAfterCoverage(activity);
-  const payerName = activityPayerName(activity);
+  const generatedCredit = activityGeneratedCreditTotal(activity);
+  const payerSummary = activityPayerSummary(activity);
   return `
     <article class="row-card activity-row">
       <div class="row-main activity-row-header">
         <div class="activity-row-title-block">
           <div class="activity-title-line">
             <h3 class="row-title">${escapeHtml(activity.name || "Activity")}</h3>
-            <span class="badge ${outstanding ? "gold" : "green"}">${outstanding ? `${currency(outstanding)} owed${activity.paidById ? ` to ${escapeHtml(payerName)}` : ""}` : "Clear"}</span>
+            <div class="activity-status-chips">
+              <span class="badge ${outstanding ? "gold" : "green"}">${outstanding ? `Due ${currency(outstanding)}` : "Clear"}</span>
+              ${generatedCredit > 0 ? `<span class="badge teal">Credit ${currency(generatedCredit)}</span>` : ""}
+            </div>
           </div>
           <p class="row-subtitle">${activity.date ? formatDate(activity.date) : "Date not set"} - ${participantCount} players</p>
         </div>
@@ -791,8 +922,8 @@ function renderActivityRow(activity) {
       </div>
       <div class="meta-grid activity-meta-grid">
         <div class="meta"><span>Total Paid</span><strong>${currency(activity.totalPaid)}</strong></div>
-        <div class="meta"><span>Per Person</span><strong>${currency(perPerson)}</strong></div>
-        <div class="meta"><span>Paid by</span><strong>${escapeHtml(payerName)}</strong></div>
+        <div class="meta"><span>Split</span><strong>${escapeHtml(activitySplitLabel(activity))}</strong></div>
+        <div class="meta"><span>Paid by</span><strong>${escapeHtml(payerSummary)}</strong></div>
         <div class="meta"><span>Players</span><strong>${participantCount}</strong></div>
       </div>
     </article>
@@ -802,11 +933,11 @@ function renderActivityRow(activity) {
 function renderActivityDetailsModal(activityId = "") {
   const activity = (state.activities || []).find((item) => item.id === activityId);
   if (!activity) return "";
-  const participantNames = (activity.playerIds || []).map((id) => getPlayerName(id)).filter(Boolean);
-  const participantCount = participantNames.length;
-  const perPerson = participantCount ? Number(activity.totalPaid || 0) / participantCount : 0;
+  const participantCount = (activity.playerIds || []).length;
   const outstanding = activityOutstandingAfterCoverage(activity);
-  const payerName = activityPayerName(activity);
+  const generatedCredit = activityGeneratedCreditTotal(activity);
+  const payerSummary = activityPayerSummary(activity);
+  const settlementRows = activitySettlementRows(activity);
   const notes = String(activity.notes || "").trim();
   return `
     <div class="modal-backdrop" data-modal-backdrop>
@@ -820,17 +951,31 @@ function renderActivityDetailsModal(activityId = "") {
         </div>
         <div class="meta-grid activity-meta-grid activity-details-meta">
           <div class="meta"><span>Total Paid</span><strong>${currency(activity.totalPaid)}</strong></div>
-          <div class="meta"><span>Per Person</span><strong>${currency(perPerson)}</strong></div>
-          <div class="meta"><span>Paid by</span><strong>${escapeHtml(payerName)}</strong></div>
-          <div class="meta"><span>Status</span><strong>${outstanding ? `${currency(outstanding)} owed` : "Clear"}</strong></div>
+          <div class="meta"><span>Split</span><strong>${escapeHtml(activitySplitLabel(activity))}</strong></div>
+          <div class="meta"><span>Paid by</span><strong>${escapeHtml(payerSummary)}</strong></div>
+          <div class="meta"><span>Status</span><strong>${outstanding ? `Due ${currency(outstanding)}` : generatedCredit ? `Credit ${currency(generatedCredit)}` : "Clear"}</strong></div>
         </div>
         <section class="activity-detail-section">
-          <h3>Players</h3>
-          ${
-            participantNames.length
-              ? `<div class="activity-detail-player-list">${participantNames.map((name) => `<span class="badge teal">${escapeHtml(name)}</span>`).join("")}</div>`
-              : `<p class="row-subtitle">No players selected.</p>`
-          }
+          <h3>Contributions and Split</h3>
+          <div class="activity-settlement-list">
+            ${settlementRows.map((row) => `
+              <article class="activity-settlement-row">
+                <div>
+                  <strong>${escapeHtml(row.name)}</strong>
+                  <span>Allocated ${currency(row.allocatedAmount)} - Paid ${currency(row.contributionAmount)}</span>
+                </div>
+                ${
+                  row.owner
+                    ? `<span class="badge blue">Owner</span>`
+                    : row.creditAmount > 0
+                      ? `<span class="badge teal">Credit ${currency(row.creditAmount)}</span>`
+                      : row.outstandingAmount > 0
+                        ? `<span class="badge gold">Due ${currency(row.outstandingAmount)}</span>`
+                        : `<span class="badge green">Settled</span>`
+                }
+              </article>
+            `).join("")}
+          </div>
         </section>
         <section class="activity-detail-section">
           <h3>Notes</h3>

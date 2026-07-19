@@ -699,12 +699,28 @@ function handleClick(event) {
     const playerId = actionTarget.dataset.player;
     if (playerId && !activityDraft.playerIds.includes(playerId)) {
       activityDraft.playerIds.push(playerId);
+      syncActivityDraftSplitValues(activityDraft);
     }
     render();
     return;
   }
   if (action === "activity-remove-player") {
     activityDraft.playerIds = activityDraft.playerIds.filter((id) => id !== actionTarget.dataset.player);
+    syncActivityDraftSplitValues(activityDraft);
+    render();
+    return;
+  }
+  if (action === "activity-add-contribution") {
+    captureActivityDraft(actionTarget.closest('form[data-form="activity"]'));
+    activityDraft.contributions = [...(activityDraft.contributions || []), { playerId: "", amount: "" }];
+    render();
+    return;
+  }
+  if (action === "activity-remove-contribution") {
+    captureActivityDraft(actionTarget.closest('form[data-form="activity"]'));
+    const contributionIndex = Number(actionTarget.dataset.contributionIndex);
+    activityDraft.contributions = (activityDraft.contributions || []).filter((_, index) => index !== contributionIndex);
+    if (!activityDraft.contributions.length) activityDraft.contributions = [{ playerId: "", amount: "" }];
     render();
     return;
   }
@@ -759,7 +775,13 @@ function handleClick(event) {
           date: activity.date || new Date().toISOString().slice(0, 10),
           totalPaid: String(activity.totalPaid || ""),
           paidById: activity.paidById || "",
+          contributions: activityContributions(activity).map((contribution) => ({
+            playerId: contribution.playerId,
+            amount: String(contribution.amount)
+          })),
           playerIds: uniqueIds(activity.playerIds || []),
+          splitMode: normalizeActivitySplitMode(activity.splitMode),
+          splitValues: Object.fromEntries(Object.entries(activity.splitValues || {}).map(([playerId, value]) => [playerId, String(value)])),
           notes: activity.notes || ""
         };
         modal = { type: "activity" };
@@ -943,11 +965,12 @@ function handleClick(event) {
   if (action === "delete-activity") {
     const activity = state.activities.find((item) => item.id === actionTarget.dataset.activity);
     if (activity) {
+      const recordedCash = activityRecordedCashTotal(activity);
       openDeleteConfirmation({
         deleteType: "activity",
         activityId: activity.id,
         title: "Delete Activity",
-        message: `Delete ${activity.name || "this activity"}? This will remove the split from selected players.`
+        message: `Delete ${activity.name || "this activity"}? This will remove the split from selected players.${recordedCash > 0 ? " Recorded payments will be returned as Credit to the people who paid." : ""}`
       });
     }
     return;
@@ -1079,6 +1102,12 @@ function handleInput(event) {
   const activityForm = event.target.closest('form[data-form="activity"]');
   if (activityForm) {
     captureActivityDraft(activityForm);
+    if (event.target.closest("[data-activity-split-mode]")) {
+      resetActivityDraftSplitValues(activityDraft, event.target.value);
+      render();
+    } else {
+      updateActivityFormPreview(activityForm);
+    }
     return;
   }
   const groupPaymentForm = event.target.closest('form[data-form="group-payment"]');
@@ -1114,6 +1143,26 @@ function handleInput(event) {
     group.url = groupUrl.value;
     saveState();
   }
+}
+
+function updateActivityFormPreview(form) {
+  if (!form?.querySelectorAll) return;
+  const contributionTotal = (activityDraft.contributions || [])
+    .reduce((total, contribution) => ledgerMoney(total + ledgerMoney(contribution.amount)), 0);
+  const contributionTotalBadge = form.querySelector("[data-activity-contribution-total]");
+  if (contributionTotalBadge) contributionTotalBadge.textContent = currency(contributionTotal);
+  if (normalizeActivitySplitMode(activityDraft.splitMode) !== "equal") return;
+  const preview = activitySplitValidation({
+    totalPaid: Number(activityDraft.totalPaid || 0),
+    playerIds: activityDraft.playerIds,
+    splitMode: "equal",
+    splitValues: {},
+    settlementOwnerId: state.settings?.organizerPlayerId || "",
+    shares: {}
+  });
+  form.querySelectorAll("[data-activity-split-preview-player]").forEach((element) => {
+    element.textContent = currency(preview.amounts[element.dataset.activitySplitPreviewPlayer] || 0);
+  });
 }
 
 async function handleSubmit(event) {
@@ -1553,9 +1602,11 @@ async function handleSubmit(event) {
   if (formType === "activity") {
     captureActivityDraft(form);
     const playerIds = activityDraft.playerIds;
-    const paidById = activityDraft.paidById;
     const totalPaid = Number(activityDraft.totalPaid || 0);
     const activityName = String(activityDraft.name || "").trim();
+    const existingActivity = activityDraft.id ? state.activities.find((item) => item.id === activityDraft.id) : null;
+    const shuttlePurchase = Boolean(activityDraft.shuttlePurchase);
+    const settlementOwnerId = existingActivity?.settlementOwnerId || state.settings?.organizerPlayerId || "";
     if (!activityName) {
       showToast("Enter an activity name.");
       render();
@@ -1566,8 +1617,8 @@ async function handleSubmit(event) {
       render();
       return;
     }
-    if (!paidById) {
-      showToast("Select who paid.");
+    if (!shuttlePurchase && !settlementOwnerId) {
+      showToast("Select the Organizer in Settings before adding an activity.");
       render();
       return;
     }
@@ -1576,31 +1627,63 @@ async function handleSubmit(event) {
       render();
       return;
     }
-    const existingActivity = activityDraft.id ? state.activities.find((item) => item.id === activityDraft.id) : null;
+    const contributions = (activityDraft.contributions || [])
+      .map((contribution) => ({
+        playerId: String(contribution.playerId || ""),
+        amount: ledgerMoney(contribution.amount)
+      }));
+    if (!contributions.length || contributions.some((contribution) => !contribution.playerId || !Number.isFinite(contribution.amount) || contribution.amount <= 0)) {
+      showToast("Select every payer and enter an amount greater than zero.");
+      render();
+      return;
+    }
+    if (uniqueIds(contributions.map((contribution) => contribution.playerId)).length !== contributions.length) {
+      showToast("Each payer can be added only once.");
+      render();
+      return;
+    }
+    const contributionTotal = contributions.reduce((total, contribution) => ledgerMoney(total + contribution.amount), 0);
+    if (contributionTotal !== ledgerMoney(totalPaid)) {
+      showToast(`Payer amounts must total ${currency(totalPaid)}.`);
+      render();
+      return;
+    }
+    const splitMode = shuttlePurchase ? "equal" : normalizeActivitySplitMode(activityDraft.splitMode);
+    const splitValues = shuttlePurchase ? {} : { ...(activityDraft.splitValues || {}) };
+    const splitValidation = activitySplitValidation({
+      totalPaid,
+      playerIds,
+      splitMode,
+      splitValues,
+      settlementOwnerId,
+      shares: existingActivity?.shares || {}
+    });
+    if (!splitValidation.valid) {
+      showToast(splitValidation.message);
+      render();
+      return;
+    }
     const activity = normalizeActivity({
       id: existingActivity?.id || createId("activity"),
       name: activityName,
       date: activityDraft.date || new Date().toISOString().slice(0, 10),
       totalPaid,
-      paidById,
+      paidById: contributions[0].playerId,
+      contributions,
+      settlementOwnerId,
       playerIds,
+      splitMode,
+      splitValues,
       notes: activityDraft.notes || "",
-      shares: JSON.parse(JSON.stringify(existingActivity?.shares || {}))
-    });
+      shares: {}
+    }, state.players, state.settings);
     if (existingActivity) {
-      const changedFinancialBasis = String(existingActivity.date || "") !== String(activity.date || "")
-        || Number(existingActivity.totalPaid || 0) !== Number(activity.totalPaid || 0)
-        || String(existingActivity.paidById || "") !== String(activity.paidById || "")
-        || uniqueIds(existingActivity.playerIds || []).join("|") !== uniqueIds(activity.playerIds || []).join("|");
-      if (changedFinancialBasis && activityHasActiveFinancialState(existingActivity)) {
-        showToast("Clear active cash, Advance, or Credit coverage before changing this activity split.");
-        render();
-        return;
-      }
+      reconcileActivityFinancials(existingActivity, activity, "activity-edit");
       state.activities = state.activities.map((item) => (item.id === existingActivity.id ? activity : item));
     } else {
       state.activities.push(activity);
     }
+    syncSessionStages();
     activityDraft = createActivityDraft();
     modal = null;
     saveState();
