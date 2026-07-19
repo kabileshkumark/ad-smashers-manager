@@ -52,6 +52,11 @@ The regression suite in `tests/regression.test.js` loads the same browser JavaSc
 - A payment-group payer's remaining Credit reduces the group's cash payable amount, is consumed before new cash, and is restored exactly if that group-payment transaction is deleted.
 - Intentional Advance remains in the Advance section. After covering the payer's own dues, the remaining Advance covers active members of each saved payment group before the payer's Credit is used.
 - The transaction trash dialog offers Reverse and Delete: both undo the exact financial effect; Reverse retains an audit row while Delete removes it. An already-reversed receipt offers Delete only. Migrated and adjustment records allow neither action.
+- Activities support one or more unique payers whose positive contributions must equal the activity total.
+- Activity allocation supports Equal, Manual, Percentage, and No. of Shares modes with exact-cent totals and invalid-input rejection.
+- The Organizer selected in Settings is the settlement owner: a non-organizer participant's share above their contribution is Due, while a contribution above their share becomes player-owned Credit.
+- Activity edits and deletion reconcile shares, existing receipts, derived Credit, saved-group coverage, histories, and Dashboard totals without losing cash audit records.
+- Activity-generated Credit covers the owner's later personal due and eligible payment-group member due without entering a shared pool.
 - Session selection keeps one scroll surface, so tapping a session arrow does not reset page scroll.
 - Android WhatsApp links target WhatsApp Business.
 - `package.json` is the version source of truth: npm metadata uses `version`, while the PWA technical build uses `appVersion`. `index.html`, `sw.js`, `manifest.webmanifest`, and `js/config.js` use the same `appVersion` for cache/update consistency.
@@ -83,6 +88,13 @@ After `npm test` passes, check these once in the app for larger UI or deployment
   - use Reverse on a test receipt and confirm the reversed audit row remains; then delete that reversed row and confirm every balance remains unchanged,
   - use Delete on another active test receipt and confirm its financial effect is undone and no audit row remains.
   - at 320 px and 390 px widths, confirm each Payment Group name remains on one line, all five actions stay in the top-right row, the status chip sits below, and the empty amount field shows only a faint `0` placeholder.
+- Open Activities and create a test activity:
+  - select two or more payers and confirm payer amounts must equal the activity total,
+  - switch through Equal, Manual, Percentage, and No. of Shares using the four icon controls,
+  - confirm all four icons stay in one row at 320 px and 390 px,
+  - verify an under-contributing non-organizer shows Due and an over-contributing non-organizer shows Credit,
+  - edit the total, payer contributions, participants, and split; confirm balances and history recalculate,
+  - delete the test activity; confirm derived balances are removed and any retained receipt cash becomes Credit.
 - Create or edit a session with 2 courts from 7-9 PM and an additional court from 7-8 PM:
   - confirm the summary reports 5 court-hours,
   - confirm the card derives `3 → 2` with 7-8 PM and 8-9 PM breakdowns,
@@ -100,6 +112,7 @@ After `npm test` passes, check these once in the app for larger UI or deployment
 Add automated tests whenever a change affects:
 
 - session payment calculation,
+- activity payer, split, edit, deletion, or settlement calculation,
 - guest or attendance behavior,
 - advance payment handling,
 - session stage/status automation,
