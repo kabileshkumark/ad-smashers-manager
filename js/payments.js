@@ -676,7 +676,31 @@ function allocateLedgerCoverage(detailsList, amount, field, source = {}) {
   return { applied, remaining };
 }
 
+let ledgerCoverageSnapshotCacheDepth = 0;
+let cachedLedgerCoverageSnapshot = null;
+
+function withLedgerCoverageSnapshotCache(callback) {
+  const outermostScope = ledgerCoverageSnapshotCacheDepth === 0;
+  if (outermostScope) cachedLedgerCoverageSnapshot = null;
+  ledgerCoverageSnapshotCacheDepth += 1;
+  try {
+    return callback();
+  } finally {
+    ledgerCoverageSnapshotCacheDepth -= 1;
+    if (ledgerCoverageSnapshotCacheDepth === 0) cachedLedgerCoverageSnapshot = null;
+  }
+}
+
 function ledgerCoverageSnapshot() {
+  if (ledgerCoverageSnapshotCacheDepth > 0 && cachedLedgerCoverageSnapshot) {
+    return cachedLedgerCoverageSnapshot;
+  }
+  const snapshot = buildLedgerCoverageSnapshot();
+  if (ledgerCoverageSnapshotCacheDepth > 0) cachedLedgerCoverageSnapshot = snapshot;
+  return snapshot;
+}
+
+function buildLedgerCoverageSnapshot() {
   const itemDetails = new Map();
   const ledgersByPlayer = new Map();
   const playerSummaries = new Map();

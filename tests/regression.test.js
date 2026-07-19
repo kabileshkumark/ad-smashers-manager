@@ -2879,6 +2879,46 @@ test("player balance rows hide zero credit and label positive credit", () => {
   assert.doesNotMatch(creditHtml, /Advance/);
 });
 
+test("authenticated renders build one fresh ledger coverage snapshot", () => {
+  const context = createAppContext();
+  context.requestAnimationFrame = (callback) => callback();
+  setAppState(context, {
+    players: [player("p1", "Player One")],
+    sessions: [],
+    activities: [],
+    paymentGroups: [],
+    paymentTransactions: [],
+    advances: {},
+    settings: {}
+  });
+
+  const firstRender = run(
+    context,
+    `
+      activeView = "payments";
+      ledgerSnapshotBuilds = 0;
+      originalBuildLedgerCoverageSnapshot = buildLedgerCoverageSnapshot;
+      buildLedgerCoverageSnapshot = function countedBuildLedgerCoverageSnapshot() {
+        ledgerSnapshotBuilds += 1;
+        return originalBuildLedgerCoverageSnapshot();
+      };
+      render();
+      ledgerSnapshotBuilds;
+    `
+  );
+  assert.equal(firstRender, 1);
+
+  const secondRender = run(
+    context,
+    `
+      state.advances.p1 = 50;
+      render();
+      ledgerSnapshotBuilds;
+    `
+  );
+  assert.equal(secondRender, 2);
+});
+
 test("player payment overage is stored as advance credit", () => {
   const context = createAppContext();
   setAppState(
