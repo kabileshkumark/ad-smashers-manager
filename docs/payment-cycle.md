@@ -1,6 +1,6 @@
 # Payment Lifecycle and Ledger Invariants
 
-**Status:** SCRUM-15 candidate rule set based on technical build 1.0.7; production approval pending
+**Status:** Released rule set for technical build 1.0.8; production verified under ADS-16
 
 **Formal release:** Version 1.0
 
@@ -36,7 +36,7 @@ flowchart LR
 - **Cash receipt:** New money received from a player or payment-group payer.
 - **Advance:** Intentional prepayment recorded in the Advance section. It settles the payer's own charges first, then active members of saved groups for which that player is the payer.
 - **Group Advance:** A payment-group payer's remaining intentional Advance allocated to active members of that saved group.
-- **Credit:** Excess cash from a completed payment. It belongs only to the payer.
+- **Credit:** Excess cash from a completed payment or an organizer-relative activity over-contribution. It belongs only to the player who created it.
 - **Group Credit:** A payer's remaining Credit allocated to active members of a saved payment group.
 - **Allocation:** Funding applied to a specific charge.
 - **Outstanding:** Charge minus cash, own Advance, Group Advance, own Credit, and Group Credit.
@@ -60,6 +60,31 @@ Group rules:
 - Existing overlapping memberships are resolved once in persisted group order. New active overlaps must be rejected because payment responsibility would be ambiguous.
 - Automatic Credit allocation is derived. It must never increase a charge's `paidAmount` or create a zero-cash transaction.
 - New group cash applies only to the canonical remaining group balance. Any excess becomes Credit for the payer.
+
+## Activity Settlement Contract
+
+Activities use the Organizer selected in Settings as the settlement owner. That player is snapshotted on the activity so a later Settings change does not rewrite historical responsibility.
+
+1. An activity has one or more unique payer contributions. Every contribution must be positive, and their exact currency total must equal the activity total.
+2. Participants receive an allocated share using one of four modes:
+   - Equal: divide the total evenly with deterministic cent rounding.
+   - Manual: entered currency amounts must total the activity amount exactly.
+   - Percentage: non-negative percentages must total 100 percent.
+   - No. of Shares: each participant receives a positive whole-number weight.
+3. For every non-organizer participant, the organizer-relative balance is:
+
+```text
+activity_balance = allocated_share - player_contribution
+```
+
+- Positive balance becomes Due to the Organizer.
+- Negative balance becomes Credit owned by that player.
+- Zero balance is Settled and produces neither Due nor Credit.
+
+4. Activity-generated Credit enters the same owner-specific Credit ledger as payment overage. It can cover that player's later personal charges or eligible saved-group member charges, but ownership never transfers.
+5. Editing an activity recalculates allocations from the updated total, payers, participants, and split. Existing receipts are preserved and reconciled; cash beyond the revised charge becomes payer Credit.
+6. Deleting an activity removes its unpaid derived balances and activity-generated Credit. Existing receipts remain in history, and receipt cash no longer required by the deleted activity becomes payer Credit.
+7. Legacy one-payer activities normalize to one contribution, Equal split, and the currently configured Organizer without changing their recorded cash history.
 
 ## Ledger Equations
 
@@ -161,5 +186,18 @@ Backup-specific evidence:
 | Cross-surface results | Group, sessions, player balances, histories, reminders, stages, and Dashboard agree with the canonical snapshot. |
 | Responsive QA | At 390 x 844, document width is 390 with no overflow, out-of-bounds element, clipped text, or overlapping balance/action controls. |
 | Isolation and cleanup | Local-only credentials and same-origin CSP were used; storage, service workers, caches, cookies, temporary files, and the test port were cleared. |
+
+## Build 1.0.8 Verification
+
+| Gate | Evidence |
+| --- | --- |
+| Automated regression | 145 tests pass, including payer ownership, group Advance/Credit, receipt Delete/Reverse, multi-payer activities, all split modes, edit/delete reconciliation, performance, and responsive controls. |
+| Build | `npm run build` synchronized the application, manifest, service-worker cache, and Hosting assets to 1.0.8. |
+| Restore point | `ad-smashers-backup-2026-07-19.json`, 155752 bytes, SHA-256 `a55df6d03c358c56378bda91a4130ac69e49c922997294cae19e71905ce4417d`. |
+| Backup replay | Latest production data was replayed in a local-only QA context without Firebase writes or persistent test records. |
+| Cross-surface results | Sessions, activities, payment groups, Player Balances, histories, Dashboard, Advance, and Credit use one canonical ledger snapshot. |
+| Responsive QA | Desktop, 390 x 844, and 320 x 760 passed with split icons in one row, no horizontal overflow, and no browser errors. |
+| Release integrity | Approved candidate tree equals merged source `134b621`; GitHub CI passed on PR #18. |
+| Production | Firebase Hosting only; HTTP 200, live version 1.0.8, active service worker, and no smoke-test errors. |
 
 Production deployment and smoke-test evidence are recorded in Jira and Confluence for Version 1.0.
