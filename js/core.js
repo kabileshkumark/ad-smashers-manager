@@ -9,7 +9,10 @@ function createActivityDraft() {
     date: new Date().toISOString().slice(0, 10),
     totalPaid: "",
     paidById: "",
+    contributions: [{ playerId: "", amount: "" }],
     playerIds: [],
+    splitMode: "equal",
+    splitValues: {},
     notes: ""
   };
 }
@@ -31,7 +34,10 @@ function createShuttleActivityDraft(activity = null) {
     date: activity?.date || new Date().toISOString().slice(0, 10),
     totalPaid: activity ? String(activity.totalPaid || "") : "",
     paidById: playerId,
+    contributions: playerId ? [{ playerId, amount: activity ? String(activity.totalPaid || "") : "" }] : [],
     playerIds: playerId ? [playerId] : [],
+    splitMode: "equal",
+    splitValues: {},
     notes: activity?.notes || "",
     shuttlePurchase: true
   };
@@ -201,6 +207,9 @@ function icon(name) {
     organizer: `<path d="m2 5 5 5 5-7 5 7 5-5-3 14H5L2 5Z" /><path d="M5 22h14" />`,
     coOrganizer: `<path d="M12 3 4 7v6c0 5 3.5 7.5 8 9 4.5-1.5 8-4 8-9V7l-8-4Z" /><path d="m9 12 2 2 4-5" />`,
     check: `<path d="m20 6-11 11-5-5" />`,
+    equal: `<path d="M5 9h14" /><path d="M5 15h14" />`,
+    percent: `<path d="m19 5-14 14" /><circle cx="7" cy="7" r="2" /><circle cx="17" cy="17" r="2" />`,
+    shares: `<path d="M10 3 8 21" /><path d="M16 3l-2 18" /><path d="M4 9h16" /><path d="M3 15h16" />`,
     clock: `<circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />`,
     eye: `<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" />`,
     edit: `<path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />`,

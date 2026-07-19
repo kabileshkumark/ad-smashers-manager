@@ -21,6 +21,10 @@ function render() {
     app.innerHTML = renderCloudLoadError(cloudError);
     return;
   }
+  withLedgerCoverageSnapshotCache(() => renderAuthenticatedApp(app));
+}
+
+function renderAuthenticatedApp(app) {
   const modalScrollPositions = captureModalScrollPositions();
   syncSessionStages();
   if (!SESSION_DETAIL_TABS.includes(activeSessionTab)) {

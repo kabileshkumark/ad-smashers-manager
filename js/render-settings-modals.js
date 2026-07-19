@@ -192,6 +192,10 @@ function renderModal() {
   return "";
 }
 
+function renderDeleteConfirmAction(config, { action = "confirm-delete", deleteType = "", label = "Delete", className = "btn danger" } = {}) {
+  return `<button class="${escapeAttr(className)}" type="button" data-action="${escapeAttr(action)}" data-delete-type="${escapeAttr(deleteType)}" data-session="${escapeAttr(config.sessionId || "")}" data-court="${escapeAttr(config.courtId || "")}" data-player="${escapeAttr(config.playerId || "")}" data-response="${escapeAttr(config.responseId || "")}" data-guest-key="${escapeAttr(config.guestKey || "")}" data-activity="${escapeAttr(config.activityId || "")}" data-payment-group="${escapeAttr(config.paymentGroupId || "")}" data-transaction="${escapeAttr(config.transactionId || "")}" data-history-type="${escapeAttr(config.historyType || "")}" data-amount="${escapeAttr(config.amount || "")}">${escapeHtml(label)}</button>`;
+}
+
 function renderDeleteConfirmModal(config = {}) {
   return `
     <div class="modal-backdrop" data-modal-backdrop>
@@ -202,9 +206,18 @@ function renderDeleteConfirmModal(config = {}) {
             <p>${escapeHtml(config.message || "This action cannot be undone.")}</p>
           </div>
         </div>
-        <div class="toolbar nowrap confirm-actions">
+        <div class="toolbar nowrap confirm-actions ${config.alternateLabel ? "transaction-choice-actions" : ""}">
           <button class="btn" type="button" data-action="cancel-delete">Cancel</button>
-          <button class="btn danger" type="button" data-action="confirm-delete" data-delete-type="${escapeAttr(config.deleteType || "")}" data-session="${escapeAttr(config.sessionId || "")}" data-court="${escapeAttr(config.courtId || "")}" data-player="${escapeAttr(config.playerId || "")}" data-response="${escapeAttr(config.responseId || "")}" data-guest-key="${escapeAttr(config.guestKey || "")}" data-activity="${escapeAttr(config.activityId || "")}" data-payment-group="${escapeAttr(config.paymentGroupId || "")}" data-transaction="${escapeAttr(config.transactionId || "")}" data-history-type="${escapeAttr(config.historyType || "")}" data-amount="${escapeAttr(config.amount || "")}">${escapeHtml(config.confirmLabel || "Delete")}</button>
+          ${config.alternateLabel ? renderDeleteConfirmAction(config, {
+            action: "confirm-alternate-delete",
+            deleteType: config.alternateDeleteType || "",
+            label: config.alternateLabel,
+            className: "btn"
+          }) : ""}
+          ${renderDeleteConfirmAction(config, {
+            deleteType: config.deleteType || "",
+            label: config.confirmLabel || "Delete"
+          })}
         </div>
       </div>
     </div>
@@ -275,6 +288,7 @@ function renderPlayerPaymentTransactionItem(playerId, transaction) {
     && !isMigrated
     && transaction.paidById === playerId
     && ["advance-payment", "group-payment", "player-payment"].includes(transaction.type);
+  const canPurge = paymentTransactionCanBePurged(transaction) && transaction.paidById === playerId;
   const group = getPaymentGroup(transaction.groupId);
   const session = transaction.sessionId ? getSession(transaction.sessionId) : null;
   const activity = transaction.activityId ? (state.activities || []).find((item) => item.id === transaction.activityId) : null;
@@ -308,7 +322,8 @@ function renderPlayerPaymentTransactionItem(playerId, transaction) {
         </div>
         <div class="toolbar nowrap">
           <span class="badge ${isActive && !isMigrated ? "green" : "gold"}">${!isActive ? "Reversed" : isMigrated ? "Migrated" : currency(transaction.amountPaid)}</span>
-          ${canReverse ? `<button class="btn icon-only danger" type="button" data-action="delete-payment-transaction" data-transaction="${escapeAttr(transaction.id)}" aria-label="Reverse ${escapeAttr(title)}" title="Reverse">${icon("trash")}</button>` : ""}
+          ${canReverse ? `<button class="btn icon-only danger" type="button" data-action="delete-payment-transaction" data-transaction="${escapeAttr(transaction.id)}" aria-label="Delete or reverse ${escapeAttr(title)}" title="Delete or Reverse">${icon("trash")}</button>` : ""}
+          ${canPurge ? `<button class="btn icon-only danger" type="button" data-action="delete-reversed-payment-transaction" data-transaction="${escapeAttr(transaction.id)}" aria-label="Permanently delete reversed ${escapeAttr(title)} record" title="Delete Reversed Record">${icon("trash")}</button>` : ""}
         </div>
       </div>
     </article>
