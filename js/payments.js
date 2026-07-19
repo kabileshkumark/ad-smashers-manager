@@ -56,8 +56,28 @@ function playerIntentionalAdvancePaid(playerId) {
   return playerIntentionalAdvancePayments(playerId).reduce((total, payment) => total + payment.amount, 0);
 }
 
+function paymentTransactionIsReversed(transaction) {
+  return Boolean(transaction && (transaction.status === "reversed" || transaction.reversedAt));
+}
+
 function paymentTransactionIsActive(transaction) {
-  return Boolean(transaction && transaction.status !== "reversed" && !transaction.reversedAt);
+  return Boolean(transaction && !paymentTransactionIsReversed(transaction));
+}
+
+function paymentTransactionIsUserReceipt(transaction) {
+  return Boolean(transaction && ["advance-payment", "group-payment", "player-payment"].includes(transaction.type));
+}
+
+function paymentTransactionCanBeReversed(transaction) {
+  return Boolean(paymentTransactionIsActive(transaction) && transaction.status !== "migrated" && paymentTransactionIsUserReceipt(transaction));
+}
+
+function paymentTransactionCanBePurged(transaction) {
+  return Boolean(
+    paymentTransactionIsReversed(transaction)
+    && transaction.status !== "migrated"
+    && paymentTransactionIsUserReceipt(transaction)
+  );
 }
 
 function playerIntentionalAdvancePayments(playerId) {
@@ -479,10 +499,24 @@ function executeConfirmedDelete(target) {
     return true;
   }
   if (deleteType === "payment-transaction") {
-    if (!deletePaymentTransaction(target.dataset.transaction)) return false;
-    modal = nextModal?.type === "groupPaymentHistory" ? nextModal : null;
+    if (!reversePaymentTransaction(target.dataset.transaction)) return false;
+    modal = ["advanceHistory", "groupPaymentHistory", "paymentHistory"].includes(nextModal?.type) ? nextModal : null;
     saveState();
     showToast("Payment reversed. Audit history retained.");
+    return true;
+  }
+  if (deleteType === "active-payment-transaction") {
+    if (!deleteActivePaymentTransaction(target.dataset.transaction)) return false;
+    modal = ["advanceHistory", "groupPaymentHistory", "paymentHistory"].includes(nextModal?.type) ? nextModal : null;
+    saveState();
+    showToast("Payment permanently deleted. Its financial effect was undone.");
+    return true;
+  }
+  if (deleteType === "reversed-payment-transaction") {
+    if (!deleteReversedPaymentTransaction(target.dataset.transaction)) return false;
+    modal = ["advanceHistory", "groupPaymentHistory", "paymentHistory"].includes(nextModal?.type) ? nextModal : null;
+    saveState();
+    showToast("Reversed record permanently deleted. Balances were not changed.");
     return true;
   }
   if (deleteType === "payment-history") {
@@ -603,6 +637,7 @@ function ledgerMoney(value) {
 function ledgerCoverageApplied(details) {
   return ledgerMoney(
     Number(details?.advanceApplied || 0)
+      + Number(details?.groupAdvanceApplied || 0)
       + Number(details?.ownCreditApplied || 0)
       + Number(details?.groupCreditApplied || 0)
   );
@@ -621,6 +656,13 @@ function allocateLedgerCoverage(detailsList, amount, field, source = {}) {
     const itemAmount = Math.min(remaining, outstanding);
     if (itemAmount <= 0) return;
     details[field] = ledgerMoney(Number(details[field] || 0) + itemAmount);
+    if (field === "groupAdvanceApplied") {
+      details.groupAdvanceSources.push({
+        payerId: source.payerId || "",
+        groupId: source.groupId || "",
+        amount: ledgerMoney(itemAmount)
+      });
+    }
     if (field === "groupCreditApplied") {
       details.groupCreditSources.push({
         payerId: source.payerId || "",
@@ -652,6 +694,8 @@ function ledgerCoverageSnapshot() {
         item,
         rawOutstanding: ledgerMoney(item.outstanding),
         advanceApplied: 0,
+        groupAdvanceApplied: 0,
+        groupAdvanceSources: [],
         ownCreditApplied: 0,
         groupCreditApplied: 0,
         groupCreditSources: []
@@ -664,6 +708,8 @@ function ledgerCoverageSnapshot() {
       playerId,
       rawOutstanding: ledgerMoney(detailsList.reduce((total, details) => total + details.rawOutstanding, 0)),
       advanceApplied: 0,
+      groupAdvanceReceived: 0,
+      groupAdvanceProvided: 0,
       ownCreditApplied: 0,
       groupCreditReceived: 0,
       groupCreditProvided: 0,
@@ -696,9 +742,36 @@ function ledgerCoverageSnapshot() {
         ])
       );
       const grossBalance = ledgerMoney([...balanceByPlayer.values()].reduce((total, amount) => total + amount, 0));
+      const payerAdvanceBefore = ledgerMoney(payerSummary?.remainingAdvance || 0);
+      const availableAdvanceForGroup = Math.min(grossBalance, payerAdvanceBefore);
+      const advanceSplit = splitAmountAcrossPlayerBalances(memberIds, availableAdvanceForGroup, balanceByPlayer);
+      let advanceApplied = 0;
+
+      advanceSplit.allocations.forEach(({ playerId, amount }) => {
+        const result = allocateLedgerCoverage(
+          ledgersByPlayer.get(playerId) || [],
+          amount,
+          "groupAdvanceApplied",
+          { payerId: group.payerId, groupId: group.id }
+        );
+        advanceApplied = ledgerMoney(advanceApplied + result.applied);
+      });
+
+      if (payerSummary) {
+        payerSummary.remainingAdvance = Math.max(0, ledgerMoney(payerSummary.remainingAdvance - advanceApplied));
+        payerSummary.groupAdvanceProvided = ledgerMoney(payerSummary.groupAdvanceProvided + advanceApplied);
+      }
+
+      const balanceAfterAdvanceByPlayer = new Map(
+        memberIds.map((playerId) => [
+          playerId,
+          ledgerMoney((ledgersByPlayer.get(playerId) || []).reduce((total, details) => total + ledgerCoverageOutstanding(details), 0))
+        ])
+      );
+      const balanceAfterAdvance = ledgerMoney([...balanceAfterAdvanceByPlayer.values()].reduce((total, amount) => total + amount, 0));
       const payerCreditBefore = ledgerMoney(payerSummary?.remainingCredit || 0);
-      const availableForGroup = Math.min(grossBalance, payerCreditBefore);
-      const split = splitAmountAcrossPlayerBalances(memberIds, availableForGroup, balanceByPlayer);
+      const availableCreditForGroup = Math.min(balanceAfterAdvance, payerCreditBefore);
+      const split = splitAmountAcrossPlayerBalances(memberIds, availableCreditForGroup, balanceAfterAdvanceByPlayer);
       let creditApplied = 0;
 
       split.allocations.forEach(({ playerId, amount }) => {
@@ -719,8 +792,11 @@ function ledgerCoverageSnapshot() {
         groupId: group.id,
         payerId: group.payerId || "",
         grossBalance,
+        advanceApplied,
         creditApplied,
-        balance: Math.max(0, ledgerMoney(grossBalance - creditApplied)),
+        balance: Math.max(0, ledgerMoney(grossBalance - advanceApplied - creditApplied)),
+        payerAdvanceBefore,
+        payerAdvanceAfter: Math.max(0, ledgerMoney(payerAdvanceBefore - advanceApplied)),
         payerCreditBefore,
         payerCreditAfter: Math.max(0, ledgerMoney(payerCreditBefore - creditApplied))
       });
@@ -729,6 +805,7 @@ function ledgerCoverageSnapshot() {
   playerIds.forEach((playerId) => {
     const summary = playerSummaries.get(playerId);
     const detailsList = ledgersByPlayer.get(playerId) || [];
+    summary.groupAdvanceReceived = ledgerMoney(detailsList.reduce((total, details) => total + details.groupAdvanceApplied, 0));
     summary.groupCreditReceived = ledgerMoney(detailsList.reduce((total, details) => total + details.groupCreditApplied, 0));
     summary.balance = ledgerMoney(detailsList.reduce((total, details) => total + ledgerCoverageOutstanding(details), 0));
   });
@@ -745,6 +822,8 @@ function emptyLedgerCoverageDetails(rawOutstanding = 0) {
   return {
     rawOutstanding: ledgerMoney(rawOutstanding),
     advanceApplied: 0,
+    groupAdvanceApplied: 0,
+    groupAdvanceSources: [],
     ownCreditApplied: 0,
     groupCreditApplied: 0,
     groupCreditSources: [],
@@ -758,6 +837,8 @@ function normalizedLedgerCoverageDetails(details, rawOutstanding = 0) {
   return {
     rawOutstanding: ledgerMoney(normalized.rawOutstanding),
     advanceApplied: ledgerMoney(normalized.advanceApplied),
+    groupAdvanceApplied: ledgerMoney(normalized.groupAdvanceApplied),
+    groupAdvanceSources: (normalized.groupAdvanceSources || []).map((source) => ({ ...source })),
     ownCreditApplied: ledgerMoney(normalized.ownCreditApplied),
     groupCreditApplied: ledgerMoney(normalized.groupCreditApplied),
     groupCreditSources: (normalized.groupCreditSources || []).map((source) => ({ ...source })),
@@ -811,6 +892,15 @@ function groupCreditAmountsByPayer(details) {
   return amounts;
 }
 
+function groupAdvanceAmountsByPayer(details) {
+  const amounts = new Map();
+  (details?.groupAdvanceSources || []).forEach((source) => {
+    if (!source.payerId) return;
+    amounts.set(source.payerId, ledgerMoney(Number(amounts.get(source.payerId) || 0) + Number(source.amount || 0)));
+  });
+  return amounts;
+}
+
 function ledgerCoverageDescription(details) {
   const parts = [];
   if (Number(details?.advanceApplied || 0) > 0) {
@@ -819,6 +909,9 @@ function ledgerCoverageDescription(details) {
   if (Number(details?.ownCreditApplied || 0) > 0) {
     parts.push(`${currency(details.ownCreditApplied)} Credit`);
   }
+  groupAdvanceAmountsByPayer(details).forEach((amount, payerId) => {
+    parts.push(`${currency(amount)} Advance from ${getPlayerName(payerId)}`);
+  });
   groupCreditAmountsByPayer(details).forEach((amount, payerId) => {
     parts.push(`${currency(amount)} Credit from ${getPlayerName(payerId)}`);
   });
@@ -878,7 +971,7 @@ function playerAvailableAdvance(playerId) {
 
 function playerAdvanceAppliedToLedger(playerId) {
   const summary = ledgerCoverageSnapshot().players.get(playerId);
-  return ledgerMoney(summary?.advanceApplied);
+  return ledgerMoney(Number(summary?.advanceApplied || 0) + Number(summary?.groupAdvanceProvided || 0));
 }
 
 function playerRemainingAdvance(playerId) {
@@ -966,10 +1059,33 @@ function paymentHistoryAmount(item) {
   return Number(item.paidAmount || 0) + Number(item.advanceAmount || 0) + Number(item.creditAmount || 0);
 }
 
+function playerAdvanceCoverageDeductions(playerId) {
+  const deductions = [];
+  ledgerCoverageSnapshot().items.forEach((details) => {
+    const ownAmount = details.playerId === playerId ? Number(details.advanceApplied || 0) : 0;
+    const groupAmount = (details.groupAdvanceSources || [])
+      .filter((source) => source.payerId === playerId)
+      .reduce((total, source) => total + Number(source.amount || 0), 0);
+    const amount = ledgerMoney(ownAmount + groupAmount);
+    if (amount <= 0) return;
+    deductions.push({
+      item: details.item,
+      coveredPlayerId: details.playerId,
+      date: details.item?.date || "",
+      amount
+    });
+  });
+  return deductions.sort((a, b) => (
+    String(a.date || "").localeCompare(String(b.date || ""))
+    || String(a.coveredPlayerId || "").localeCompare(String(b.coveredPlayerId || ""))
+    || String(ledgerItemKey(a.item)).localeCompare(String(ledgerItemKey(b.item)))
+  ));
+}
+
 function playerAdvanceCycleSummaries(playerId) {
-  const ledgerRemainders = playerLedger(playerId).map((item) => ({
-    item,
-    remaining: Number(item.outstanding || 0)
+  const ledgerRemainders = playerAdvanceCoverageDeductions(playerId).map((deduction) => ({
+    ...deduction,
+    remaining: deduction.amount
   }));
   return playerIntentionalAdvancePayments(playerId).map((payment) => {
     let balance = payment.amount;
@@ -984,7 +1100,7 @@ function playerAdvanceCycleSummaries(playerId) {
       deductions.push({
         type: ledger.item.type,
         date: ledger.item.date || "",
-        label: advanceDeductionLabel(ledger.item),
+        label: advanceDeductionLabel(ledger.item, ledger.coveredPlayerId, playerId),
         amount: Number(amount.toFixed(2)),
         balanceAfter: balance
       });
@@ -1057,10 +1173,12 @@ function playerAdvanceSummary(playerId) {
   };
 }
 
-function advanceDeductionLabel(item) {
-  if (item.type === "session") return `${formatDate(item.session.date)} session`;
-  if (item.type === "activity") return `${formatDate(item.activity.date)} ${item.activity.name || "Activity"}`;
-  return item.label || "Deduction";
+function advanceDeductionLabel(item, coveredPlayerId = "", payerId = "") {
+  let label = item.label || "Deduction";
+  if (item.type === "session") label = `${formatDate(item.session.date)} session`;
+  if (item.type === "activity") label = `${formatDate(item.activity.date)} ${item.activity.name || "Activity"}`;
+  if (coveredPlayerId && coveredPlayerId !== payerId) label += ` - ${getPlayerName(coveredPlayerId)}`;
+  return label;
 }
 
 function advanceDeductionCopyLine(deduction) {
@@ -1132,6 +1250,9 @@ function buildPaymentGroupPaymentHistoryCopy(groupId = "") {
   appendCopySection(lines, "Activities", activityPaymentCopyLinesForPlayers(playerIds, { dueOnly: false }));
   appendCopySection(lines, "Payment Transactions", paymentGroupTransactionCopyLines(group.id));
   appendCoverageCopySection(lines, playerIds);
+  if (groupSummary.advanceApplied > 0) {
+    lines.push("", "Payment Group Advance", `- ${currency(groupSummary.advanceApplied)} Advance applied from ${getPlayerName(group.payerId)}`);
+  }
   if (groupSummary.creditApplied > 0) {
     lines.push("", "Payment Group Credit", `- ${currency(groupSummary.creditApplied)} Credit applied from ${getPlayerName(group.payerId)}`);
   }
@@ -1147,6 +1268,7 @@ function coverageTotalsForPlayers(playerIds) {
       if (!summary) return totals;
       totals.rawOutstanding += Number(summary.rawOutstanding || 0);
       totals.advanceApplied += Number(summary.advanceApplied || 0);
+      totals.groupAdvanceReceived += Number(summary.groupAdvanceReceived || 0);
       totals.ownCreditApplied += Number(summary.ownCreditApplied || 0);
       totals.groupCreditReceived += Number(summary.groupCreditReceived || 0);
       totals.remainingAdvance += Number(summary.remainingAdvance || 0);
@@ -1154,17 +1276,18 @@ function coverageTotalsForPlayers(playerIds) {
       totals.balance += Number(summary.balance || 0);
       return totals;
     },
-    { rawOutstanding: 0, advanceApplied: 0, ownCreditApplied: 0, groupCreditReceived: 0, remainingAdvance: 0, remainingCredit: 0, balance: 0 }
+    { rawOutstanding: 0, advanceApplied: 0, groupAdvanceReceived: 0, ownCreditApplied: 0, groupCreditReceived: 0, remainingAdvance: 0, remainingCredit: 0, balance: 0 }
   );
 }
 
 function appendCoverageCopySection(lines, playerIds) {
   const totals = coverageTotalsForPlayers(playerIds);
-  const hasCoverage = totals.advanceApplied > 0 || totals.ownCreditApplied > 0 || totals.groupCreditReceived > 0;
+  const hasCoverage = totals.advanceApplied > 0 || totals.groupAdvanceReceived > 0 || totals.ownCreditApplied > 0 || totals.groupCreditReceived > 0;
   const hasBalance = totals.remainingAdvance > 0 || totals.remainingCredit > 0;
   if (!hasCoverage && !hasBalance) return;
   lines.push("", "Coverage");
   if (totals.advanceApplied > 0) lines.push(`- Advance applied: ${currency(totals.advanceApplied)}`);
+  if (totals.groupAdvanceReceived > 0) lines.push(`- Payment-group Advance applied: ${currency(totals.groupAdvanceReceived)}`);
   if (totals.ownCreditApplied > 0) lines.push(`- Own Credit applied: ${currency(totals.ownCreditApplied)}`);
   if (totals.groupCreditReceived > 0) lines.push(`- Payment-group Credit applied: ${currency(totals.groupCreditReceived)}`);
   if (totals.balance > 0) lines.push(`- Remaining due: ${currency(totals.balance)}`);
@@ -1255,6 +1378,7 @@ function sessionPaymentCopyLinesForPlayers(playerIds, { dueOnly = false } = {}) 
           due: 0,
           paid: 0,
           advanceApplied: 0,
+          groupAdvanceApplied: 0,
           ownCreditApplied: 0,
           groupCreditApplied: 0,
           creditCreated: 0,
@@ -1263,6 +1387,7 @@ function sessionPaymentCopyLinesForPlayers(playerIds, { dueOnly = false } = {}) 
         summary.due += due;
         summary.paid += paid;
         summary.advanceApplied += coverage.advanceApplied;
+        summary.groupAdvanceApplied += coverage.groupAdvanceApplied;
         summary.ownCreditApplied += coverage.ownCreditApplied;
         summary.groupCreditApplied += coverage.groupCreditApplied;
         summary.creditCreated += creditCreated;
@@ -1279,6 +1404,7 @@ function sessionPaymentCopyLinesForPlayers(playerIds, { dueOnly = false } = {}) 
       ];
       if (summary.paid > 0) details.push(`Cash recorded ${currency(summary.paid)}`);
       if (summary.advanceApplied > 0) details.push(`Advance applied ${currency(summary.advanceApplied)}`);
+      if (summary.groupAdvanceApplied > 0) details.push(`Group Advance applied ${currency(summary.groupAdvanceApplied)}`);
       if (summary.ownCreditApplied > 0) details.push(`Own Credit applied ${currency(summary.ownCreditApplied)}`);
       if (summary.groupCreditApplied > 0) details.push(`Group Credit applied ${currency(summary.groupCreditApplied)}`);
       if (!dueOnly && summary.creditCreated > 0) details.push(`Credit created ${currency(summary.creditCreated)}`);
@@ -1313,23 +1439,25 @@ function activityPaymentCopyLinesForPlayers(playerIds, { dueOnly = false } = {})
             shareOutstanding(share)
           );
           total.advanceApplied += coverage.advanceApplied;
+          total.groupAdvanceApplied += coverage.groupAdvanceApplied;
           total.ownCreditApplied += coverage.ownCreditApplied;
           total.groupCreditApplied += coverage.groupCreditApplied;
           total.pending += coverage.outstanding;
           total.hasShare = true;
           return total;
         },
-        { share: 0, paid: 0, advanceApplied: 0, ownCreditApplied: 0, groupCreditApplied: 0, pending: 0, hasShare: false }
+        { share: 0, paid: 0, advanceApplied: 0, groupAdvanceApplied: 0, ownCreditApplied: 0, groupCreditApplied: 0, pending: 0, hasShare: false }
       );
       if (!summary.hasShare) return null;
       if (dueOnly && summary.pending <= 0) return null;
-      const coverageApplied = summary.advanceApplied + summary.ownCreditApplied + summary.groupCreditApplied;
+      const coverageApplied = summary.advanceApplied + summary.groupAdvanceApplied + summary.ownCreditApplied + summary.groupCreditApplied;
       if (!dueOnly && summary.share <= 0 && summary.paid <= 0 && coverageApplied <= 0 && summary.pending <= 0) return null;
       const details = [
         `Share ${currency(summary.share)}`
       ];
       if (summary.paid > 0) details.push(`Cash recorded ${currency(summary.paid)}`);
       if (summary.advanceApplied > 0) details.push(`Advance applied ${currency(summary.advanceApplied)}`);
+      if (summary.groupAdvanceApplied > 0) details.push(`Group Advance applied ${currency(summary.groupAdvanceApplied)}`);
       if (summary.ownCreditApplied > 0) details.push(`Own Credit applied ${currency(summary.ownCreditApplied)}`);
       if (summary.groupCreditApplied > 0) details.push(`Group Credit applied ${currency(summary.groupCreditApplied)}`);
       if (summary.pending) details.push(`Pending ${currency(summary.pending)}`);
@@ -1471,6 +1599,10 @@ function paymentGroupCreditApplied(group) {
   return paymentGroupCoverageSummary(group).creditApplied;
 }
 
+function paymentGroupAdvanceApplied(group) {
+  return paymentGroupCoverageSummary(group).advanceApplied;
+}
+
 function paymentGroupBalance(group) {
   return paymentGroupCoverageSummary(group).balance;
 }
@@ -1483,8 +1615,11 @@ function paymentGroupCoverageSummary(group) {
     groupId: group?.id || "",
     payerId: group?.payerId || "",
     grossBalance: balance,
+    advanceApplied: 0,
     creditApplied: 0,
     balance,
+    payerAdvanceBefore: Number(group?.payerId ? playerRemainingAdvance(group.payerId) : 0),
+    payerAdvanceAfter: Number(group?.payerId ? playerRemainingAdvance(group.payerId) : 0),
     payerCreditBefore: Number(group?.payerId ? playerRemainingCredit(group.payerId) : 0),
     payerCreditAfter: Number(group?.payerId ? playerRemainingCredit(group.payerId) : 0)
   };
@@ -1777,9 +1912,9 @@ function reversePaymentAllocation(allocation) {
   }
 }
 
-function deletePaymentTransaction(transactionId) {
+function reversePaymentTransaction(transactionId) {
   const transaction = (state.paymentTransactions || []).find((item) => item.id === transactionId);
-  if (!paymentTransactionIsActive(transaction)) return false;
+  if (!paymentTransactionCanBeReversed(transaction)) return false;
   if (!(transaction.type === "advance-payment" && transaction.separateAdvance === true)) {
     [...(transaction.allocations || [])].reverse().forEach((allocation) => reversePaymentAllocation(allocation));
   }
@@ -1787,6 +1922,22 @@ function deletePaymentTransaction(transactionId) {
   transaction.reversedAt = new Date().toISOString();
   syncSessionStages();
   return true;
+}
+
+function deleteReversedPaymentTransaction(transactionId) {
+  const transactionIndex = (state.paymentTransactions || []).findIndex((item) => item.id === transactionId);
+  if (transactionIndex < 0) return false;
+  const transaction = state.paymentTransactions[transactionIndex];
+  if (!paymentTransactionCanBePurged(transaction)) return false;
+  state.paymentTransactions.splice(transactionIndex, 1);
+  return true;
+}
+
+function deleteActivePaymentTransaction(transactionId) {
+  const transaction = (state.paymentTransactions || []).find((item) => item.id === transactionId);
+  if (!paymentTransactionCanBeReversed(transaction)) return false;
+  if (!reversePaymentTransaction(transactionId)) return false;
+  return deleteReversedPaymentTransaction(transactionId);
 }
 
 function applySessionPayment(payment, session, amount) {

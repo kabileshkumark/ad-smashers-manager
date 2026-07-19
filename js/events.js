@@ -1,6 +1,21 @@
 let voteDragState = null;
 let viewNavigationPending = false;
 
+function openPaymentTransactionActions(transaction) {
+  if (!paymentTransactionCanBeReversed(transaction)) return false;
+  const isAdvancePayment = transaction.type === "advance-payment";
+  openDeleteConfirmation({
+    deleteType: "active-payment-transaction",
+    transactionId: transaction.id,
+    confirmLabel: "Delete",
+    alternateDeleteType: "payment-transaction",
+    alternateLabel: "Reverse",
+    title: isAdvancePayment ? "Manage Advance Payment" : "Manage Payment",
+    message: "Reverse undoes the financial effect and keeps a reversed audit row. Delete undoes the same financial effect and permanently removes the row."
+  });
+  return true;
+}
+
 function setSessionField(sessionId, fieldName, value) {
   const session = getSession(sessionId);
   const numeric = ["plannedCourts", "bookedCourts", "playersPerCourt", "expectedPlayers", "totalPaid", "perPersonAmount", "shuttleCost", "waterCost"];
@@ -358,7 +373,7 @@ function handleClick(event) {
     cancelDeleteConfirmation();
     return;
   }
-  if (action === "confirm-delete") {
+  if (action === "confirm-delete" || action === "confirm-alternate-delete") {
     if (executeConfirmedDelete(actionTarget)) {
       render();
     } else {
@@ -951,16 +966,18 @@ function handleClick(event) {
   }
   if (action === "delete-payment-transaction") {
     const transaction = (state.paymentTransactions || []).find((item) => item.id === actionTarget.dataset.transaction);
-    if (transaction) {
-      const isAdvancePayment = transaction.type === "advance-payment";
+    openPaymentTransactionActions(transaction);
+    return;
+  }
+  if (action === "delete-reversed-payment-transaction") {
+    const transaction = (state.paymentTransactions || []).find((item) => item.id === actionTarget.dataset.transaction);
+    if (paymentTransactionCanBePurged(transaction)) {
       openDeleteConfirmation({
-        deleteType: "payment-transaction",
+        deleteType: "reversed-payment-transaction",
         transactionId: transaction.id,
-        confirmLabel: "Reverse",
-        title: isAdvancePayment ? "Reverse Advance" : "Reverse Payment",
-        message: isAdvancePayment
-          ? `Reverse this Advance payment from ${getPlayerName(transaction.paidById)}? The Advance balance will reduce and the audit record will remain.`
-          : `Reverse this payment by ${getPlayerName(transaction.paidById)}? The applied amount will become due again and the audit record will remain.`
+        confirmLabel: "Delete",
+        title: "Delete Reversed Record",
+        message: "Permanently delete this reversed transaction from history? Balances will not change. Keep it when the reversal is part of the audit trail. This cannot be undone."
       });
     }
     return;

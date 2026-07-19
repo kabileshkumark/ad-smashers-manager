@@ -297,6 +297,7 @@ function renderPaymentGroupCard(group) {
           <div class="payment-group-details">
             <p class="row-subtitle">Paid by ${escapeHtml(payerName)} - ${memberCount} members</p>
             <p class="row-subtitle payment-group-members">${escapeHtml(paymentGroupMemberNames(group))}</p>
+            ${summary.advanceApplied > 0 ? `<p class="row-subtitle">${currency(summary.advanceApplied)} Advance applied from ${escapeHtml(payerName)}</p>` : ""}
             ${summary.creditApplied > 0 ? `<p class="row-subtitle">${currency(summary.creditApplied)} Credit applied from ${escapeHtml(payerName)}</p>` : ""}
           </div>
         </div>
@@ -436,6 +437,7 @@ function renderAdvanceHistoryModal(playerId = "") {
 
 function renderAdvanceHistoryRow(summary) {
   const isActive = !summary.reversed;
+  const canPurge = paymentTransactionCanBePurged(summary.transaction);
   return `
     <article class="row-card payment-transaction-row advance-history-row">
       <div class="row-main advance-history-layout">
@@ -446,7 +448,13 @@ function renderAdvanceHistoryRow(summary) {
           </div>
           <div class="toolbar nowrap advance-history-actions">
             <span class="badge ${isActive ? (summary.balance ? "teal" : "green") : "gold"}">${isActive ? `${currency(summary.balance)} balance` : "Reversed"}</span>
-            <button class="btn icon-only danger" type="button" data-action="delete-payment-transaction" data-transaction="${escapeAttr(summary.id)}" ${isActive ? "" : "disabled"} aria-label="Reverse advance payment" title="Reverse">${icon("trash")}</button>
+            ${
+              isActive
+                ? `<button class="btn icon-only danger" type="button" data-action="delete-payment-transaction" data-transaction="${escapeAttr(summary.id)}" aria-label="Delete or reverse advance payment" title="Delete or Reverse">${icon("trash")}</button>`
+                : canPurge
+                  ? `<button class="btn icon-only danger" type="button" data-action="delete-reversed-payment-transaction" data-transaction="${escapeAttr(summary.id)}" aria-label="Permanently delete reversed advance record" title="Delete Reversed Record">${icon("trash")}</button>`
+                  : ""
+            }
           </div>
         </div>
         ${
@@ -508,6 +516,7 @@ function renderGroupPaymentHistoryRow(transaction) {
   const creditAddedText = Number(transaction.advanceAmount || 0) > 0 ? `, ${currency(transaction.advanceAmount)} Credit added` : "";
   const isActive = paymentTransactionIsActive(transaction);
   const isMigrated = transaction.status === "migrated";
+  const canPurge = paymentTransactionCanBePurged(transaction);
   const paymentBadge = !isActive ? "Reversed" : isMigrated ? "Migrated" : `${currency(transaction.amountPaid)} cash`;
   const paymentBadgeClass = isActive && !isMigrated ? "green" : "gold";
   return `
@@ -520,7 +529,13 @@ function renderGroupPaymentHistoryRow(transaction) {
         </div>
         <div class="toolbar nowrap">
           <span class="badge ${paymentBadgeClass}">${paymentBadge}</span>
-          <button class="btn icon-only danger" type="button" data-action="delete-payment-transaction" data-transaction="${escapeAttr(transaction.id)}" ${isActive && !isMigrated ? "" : "disabled"} aria-label="Reverse group payment" title="Reverse">${icon("trash")}</button>
+          ${
+            isActive && !isMigrated
+              ? `<button class="btn icon-only danger" type="button" data-action="delete-payment-transaction" data-transaction="${escapeAttr(transaction.id)}" aria-label="Delete or reverse group payment" title="Delete or Reverse">${icon("trash")}</button>`
+              : canPurge
+                ? `<button class="btn icon-only danger" type="button" data-action="delete-reversed-payment-transaction" data-transaction="${escapeAttr(transaction.id)}" aria-label="Permanently delete reversed group payment record" title="Delete Reversed Record">${icon("trash")}</button>`
+                : ""
+          }
         </div>
       </div>
     </article>
@@ -732,7 +747,7 @@ function renderPlayerBalanceRow(player) {
             <div class="player-balance-chips" aria-label="Payment summary for ${escapeAttr(playerLabel)}">
               <span class="badge green">Covered ${currency(covered)}</span>
               <span class="player-balance-chip-pair">
-                <span class="badge ${due ? "gold" : "green"}">Due ${currency(due)}</span>
+                <span class="badge ${due ? "gold" : "green"}">${due ? `Due ${currency(due)}` : "Clear"}</span>
                 ${remainingCredit > 0 ? `<span class="badge teal">Credit ${currency(remainingCredit)}</span>` : ""}
               </span>
             </div>

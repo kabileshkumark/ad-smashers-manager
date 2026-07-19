@@ -50,7 +50,8 @@ The regression suite in `tests/regression.test.js` loads the same browser JavaSc
 - Saved payment groups can include named guests and keep those guest names in the group member summary.
 - Post-game overpayments become Credit owned only by the payer.
 - A payment-group payer's remaining Credit reduces the group's cash payable amount, is consumed before new cash, and is restored exactly if that group-payment transaction is deleted.
-- Intentional Advance remains in the Advance section and does not transfer to other payment-group members.
+- Intentional Advance remains in the Advance section. After covering the payer's own dues, the remaining Advance covers active members of each saved payment group before the payer's Credit is used.
+- The transaction trash dialog offers Reverse and Delete: both undo the exact financial effect; Reverse retains an audit row while Delete removes it. An already-reversed receipt offers Delete only. Migrated and adjustment records allow neither action.
 - Session selection keeps one scroll surface, so tapping a session arrow does not reset page scroll.
 - Android WhatsApp links target WhatsApp Business.
 - `package.json` is the version source of truth: npm metadata uses `version`, while the PWA technical build uses `appVersion`. `index.html`, `sw.js`, `manifest.webmanifest`, and `js/config.js` use the same `appVersion` for cache/update consistency.
@@ -78,6 +79,9 @@ After `npm test` passes, check these once in the app for larger UI or deployment
   - clear players should appear last.
   - for a group payer with remaining Credit and another member with a due, confirm the group shows the net cash payable amount,
   - apply the group payment and confirm Credit is used before cash, the member due clears, and payment history records the Credit used.
+  - for a group payer with intentional Advance, confirm the payer's own dues are covered first, member dues are then covered, the individual and group rows agree, and the payer's Advance history names member deductions.
+  - use Reverse on a test receipt and confirm the reversed audit row remains; then delete that reversed row and confirm every balance remains unchanged,
+  - use Delete on another active test receipt and confirm its financial effect is undone and no audit row remains.
   - at 320 px and 390 px widths, confirm each Payment Group name remains on one line, all five actions stay in the top-right row, the status chip sits below, and the empty amount field shows only a faint `0` placeholder.
 - Create or edit a session with 2 courts from 7-9 PM and an additional court from 7-8 PM:
   - confirm the summary reports 5 court-hours,

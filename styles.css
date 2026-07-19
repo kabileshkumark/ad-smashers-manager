@@ -2601,6 +2601,18 @@ body.is-scrolling-content .bottom-nav {
   min-width: 112px;
 }
 
+.transaction-choice-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+}
+
+.transaction-choice-actions .btn {
+  min-width: 0;
+  width: 100%;
+  white-space: nowrap;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -3889,6 +3901,16 @@ body.is-scrolling-content .bottom-nav {
 }
 
 @media (max-width: 374px) {
+  .transaction-choice-actions {
+    gap: 6px;
+  }
+
+  .transaction-choice-actions .btn {
+    padding-right: 5px;
+    padding-left: 5px;
+    font-size: 0.86rem;
+  }
+
   .payment-group-card {
     padding-right: 6px;
     padding-left: 6px;

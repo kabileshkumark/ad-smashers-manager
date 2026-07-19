@@ -1,6 +1,6 @@
 # Payment Lifecycle and Ledger Invariants
 
-**Status:** Approved engineering baseline for technical build 1.0.4
+**Status:** SCRUM-15 candidate rule set based on technical build 1.0.7; production approval pending
 
 **Formal release:** Version 1.0
 
@@ -34,11 +34,12 @@ flowchart LR
 - **Court expense:** Amount paid to the venue for a session.
 - **Charge:** Amount owed by one player for a session or activity.
 - **Cash receipt:** New money received from a player or payment-group payer.
-- **Advance:** Intentional prepayment recorded in the Advance section. It can settle only that player's charges.
+- **Advance:** Intentional prepayment recorded in the Advance section. It settles the payer's own charges first, then active members of saved groups for which that player is the payer.
+- **Group Advance:** A payment-group payer's remaining intentional Advance allocated to active members of that saved group.
 - **Credit:** Excess cash from a completed payment. It belongs only to the payer.
 - **Group Credit:** A payer's remaining Credit allocated to active members of a saved payment group.
 - **Allocation:** Funding applied to a specific charge.
-- **Outstanding:** Charge minus cash, Advance, own Credit, and Group Credit.
+- **Outstanding:** Charge minus cash, own Advance, Group Advance, own Credit, and Group Credit.
 
 ## Allocation Order
 
@@ -47,14 +48,14 @@ The ledger applies funding in this order:
 1. Recorded cash already allocated to the charge.
 2. The debtor's intentional Advance, oldest charge first.
 3. The debtor's own Credit, oldest charge first.
-4. Remaining Credit from the saved payment-group payer.
-5. New cash entered for an individual or group payment.
+4. Remaining intentional Advance from the saved payment-group payer.
+5. Remaining Credit from the saved payment-group payer.
+6. New cash entered for an individual or group payment.
 
 Group rules:
 
-- Advance never transfers to another player.
-- Credit may transfer only through an active saved payment group.
-- A payer's Credit is reserved once across all groups; it cannot be shown as covering multiple balances simultaneously.
+- Advance and Credit transfer only from the configured payer through an active saved payment group.
+- A payer's Advance and Credit are each reserved once across all groups; neither can be shown as covering multiple balances simultaneously.
 - Groups are processed in persisted creation order. Within a group, partial funding is split across member balances using the existing deterministic cent-safe split, then applied oldest charge first.
 - Existing overlapping memberships are resolved once in persisted group order. New active overlaps must be rejected because payment responsibility would be ambiguous.
 - Automatic Credit allocation is derived. It must never increase a charge's `paidAmount` or create a zero-cash transaction.
@@ -65,14 +66,14 @@ Group rules:
 For every charge:
 
 ```text
-outstanding = max(0, charge - cash - advance - own_credit - group_credit)
+outstanding = max(0, charge - cash - own_advance - group_advance - own_credit - group_credit)
 ```
 
 For every player:
 
 ```text
 player_due = sum(player charge outstanding)
-remaining_advance = advance_received - advance_applied_to_own_charges
+remaining_advance = advance_received - advance_applied_to_own_charges - group_advance_provided
 remaining_credit = credit_created - own_credit_applied - group_credit_provided
 ```
 
@@ -86,6 +87,7 @@ Global controls:
 
 ```text
 sum(group_credit_provided) = sum(group_credit_received)
+sum(group_advance_provided) = sum(group_advance_received)
 credit_applied <= credit_created
 advance_applied <= advance_received
 no allocation can exceed its charge outstanding
@@ -113,6 +115,8 @@ Dashboard values must come from the same ledger snapshot as operational pages.
 
 - A payment event must retain payer, amount, date/time, funding type, covered players, charge allocations, and resulting Credit.
 - Reversal must preserve an audit record and reverse the exact original allocations.
+- The transaction trash dialog must offer two explicit outcomes for an active user receipt: Reverse undoes the exact allocations and retains a reversed audit row; Delete performs the same reversal and then removes that row.
+- An already-reversed user receipt offers Delete only. Deleting it must not recalculate any balance or allocation. Migrated and adjustment audit records cannot be reversed or purged.
 - A session, activity, or player with financial activity must not be hard-deleted while allocations reference it.
 - Attendance, guest count, role, or rate changes after collection must not silently delete or resize a paid charge. They require a reconciled adjustment or reversal first.
 - Payment method stored on a historical receipt must not change when the player's current preference changes.

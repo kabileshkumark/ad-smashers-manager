@@ -2988,7 +2988,7 @@ test("payments page records player advances and copies deduction summary", () =>
   assert.match(historyHtml, /advance-deduction-list/);
   assert.match(historyHtml, /delete-payment-transaction/);
 
-  assert.equal(run(context, 'deletePaymentTransaction(state.paymentTransactions[0].id)'), true);
+  assert.equal(run(context, 'reversePaymentTransaction(state.paymentTransactions[0].id)'), true);
   assert.deepEqual(jsonValue(context, 'playerAdvanceSummary("payer")'), { received: 0, deducted: 0, balance: 0 });
 });
 
@@ -3085,7 +3085,7 @@ test("legacy advance section entries are not double counted as credit", () => {
   assert.equal(run(context, 'playerAvailableCredit("payer")'), 0);
   assert.equal(run(context, 'playerAvailableAdvance("payer")'), 200);
   assert.deepEqual(jsonValue(context, 'playerAdvanceSummary("payer")'), { received: 200, deducted: 20, balance: 180 });
-  assert.equal(run(context, 'deletePaymentTransaction("legacy-advance")'), true);
+  assert.equal(run(context, 'reversePaymentTransaction("legacy-advance")'), true);
   assert.equal(run(context, 'playerAdvance("payer")'), 0);
 });
 
@@ -3101,7 +3101,7 @@ test("group payment overage credit belongs entirely to the payer", () => {
   assert.equal(run(context, 'playerAvailableAdvance("member")'), 0);
   assert.match(run(context, 'renderPlayerBalanceRow(getPlayer("payer"))'), /Credit 100 AED/);
   assert.doesNotMatch(run(context, 'renderPlayerBalanceRow(getPlayer("member"))'), /Credit/);
-  assert.equal(run(context, 'deletePaymentTransaction(state.paymentTransactions[0].id)'), true);
+  assert.equal(run(context, 'reversePaymentTransaction(state.paymentTransactions[0].id)'), true);
   assert.equal(run(context, 'playerRemainingCredit("payer")'), 0);
   assert.equal(run(context, 'state.paymentTransactions.length'), 1);
   assert.equal(run(context, 'state.paymentTransactions[0].status'), "reversed");
@@ -3242,7 +3242,7 @@ test("payer Credit is consumed before new cash for a payment group", () => {
   assert.equal(result.transaction.allocations.some((allocation) => allocation.type === "credit-use"), false);
 });
 
-test("intentional Advance does not transfer across a payment group", () => {
+test("payment-group payer Advance covers member dues after the payer's own dues", () => {
   const context = createAppContext();
   setAppState(
     context,
@@ -3281,9 +3281,17 @@ test("intentional Advance does not transfer across a payment group", () => {
   run(context, 'recordPlayerAdvance("payer", 82)');
 
   assert.equal(run(context, 'playerRemainingCredit("payer")'), 0);
+  assert.equal(run(context, 'paymentGroupAdvanceApplied(getPaymentGroup("yogesh-group"))'), 40);
   assert.equal(run(context, 'paymentGroupCreditApplied(getPaymentGroup("yogesh-group"))'), 0);
-  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("yogesh-group"))'), 40);
-  assert.equal(run(context, 'playerRemainingAdvance("payer")'), 82);
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("yogesh-group"))'), 0);
+  assert.equal(run(context, 'playerRemainingAdvance("payer")'), 42);
+  assert.equal(run(context, 'playerBalance("member")'), 0);
+  assert.equal(run(context, 'paymentEffectiveStatus(state.sessions[0], state.sessions[0].payments.member)'), "Paid");
+  assert.equal(run(context, 'state.sessions[0].payments.member.status'), "Pending");
+  assert.match(run(context, 'ledgerCoverageDescription(paymentCoverageDetails(state.sessions[0], state.sessions[0].payments.member))'), /40 AED Advance from Yogesh/);
+  assert.match(run(context, 'renderPaymentGroupCard(getPaymentGroup("yogesh-group"))'), /40 AED Advance applied from Yogesh/);
+  assert.deepEqual(jsonValue(context, 'playerAdvanceSummary("payer")'), { received: 82, deducted: 40, balance: 42 });
+  assert.match(run(context, 'buildPlayerAdvanceSummaryCopy("payer")'), /session - Abhineya: Deducted 40 AED, Bal adv 42 AED/);
   assert.deepEqual(jsonValue(context, 'applyGroupPayment({ paidById: "payer", playerIds: ["payer", "member"], amountPaid: 0, groupId: "yogesh-group" })'), {
     applied: 0,
     creditUsed: 0,
@@ -3291,6 +3299,73 @@ test("intentional Advance does not transfer across a payment group", () => {
     allocations: []
   });
   assert.equal(run(context, 'state.sessions[0].payments.member.status'), "Pending");
+});
+
+test("Kuberan backup scenario clears Kalai with payer Advance and keeps older Credit", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("kuberan", "Kuberan"), player("kalai", "Kalai")],
+      advances: { kuberan: 35 },
+      paymentGroups: [
+        { id: "kuberan-group", name: "Kuberan", payerId: "kuberan", playerIds: ["kuberan", "kalai"], guests: [], active: true }
+      ],
+      sessions: [
+        baseSession({
+          id: "kuberan-own-due",
+          date: isoDateFromToday(-2),
+          totalPaid: 105,
+          perPersonAmount: 105,
+          responses: [{
+            id: "kuberan-response",
+            playerId: "kuberan",
+            voteOrder: 1,
+            attendanceChoice: "in",
+            guestCount: 0,
+            racketNeeded: false,
+            rawOptions: ["I'm in"]
+          }]
+        }),
+        baseSession({
+          id: "kalai-group-due",
+          date: isoDateFromToday(-1),
+          totalPaid: 75,
+          perPersonAmount: 75,
+          responses: [{
+            id: "kalai-response",
+            playerId: "kalai",
+            voteOrder: 1,
+            attendanceChoice: "in",
+            guestCount: 0,
+            racketNeeded: false,
+            rawOptions: ["I'm in"]
+          }]
+        })
+      ]
+    })
+  );
+  run(context, 'recordPlayerAdvance("kuberan", 500)');
+
+  assert.equal(run(context, 'playerBalance("kuberan")'), 0);
+  assert.equal(run(context, 'playerBalance("kalai")'), 0);
+  assert.equal(run(context, 'paymentGroupGrossBalance(getPaymentGroup("kuberan-group"))'), 75);
+  assert.equal(run(context, 'paymentGroupAdvanceApplied(getPaymentGroup("kuberan-group"))'), 75);
+  assert.equal(run(context, 'paymentGroupCreditApplied(getPaymentGroup("kuberan-group"))'), 0);
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("kuberan-group"))'), 0);
+  assert.equal(run(context, 'playerRemainingAdvance("kuberan")'), 320);
+  assert.equal(run(context, 'playerRemainingCredit("kuberan")'), 35);
+  assert.deepEqual(jsonValue(context, 'playerAdvanceSummary("kuberan")'), { received: 500, deducted: 180, balance: 320 });
+  assert.deepEqual(jsonValue(context, 'dashboardPaymentTotals(state.sessions)'), {
+    due: 180,
+    cashApplied: 0,
+    advanceApplied: 180,
+    creditApplied: 0,
+    covered: 180,
+    outstanding: 0
+  });
+  assert.match(run(context, 'buildPaymentGroupPaymentHistoryCopy("kuberan-group")'), /Payment Group Advance[\s\S]*75 AED Advance applied from Kuberan/);
+  assert.doesNotMatch(run(context, 'renderPlayerBalanceRow(getPlayer("kalai"))'), /Due/);
 });
 
 test("payer Credit is reserved once across multiple saved payment groups", () => {
@@ -3357,7 +3432,7 @@ test("payment-group membership conflicts reject shared members but allow the sam
   assert.deepEqual(jsonValue(context, 'paymentGroupMembershipConflicts(["payer", "member-a"], "group-a", "payer")'), []);
 });
 
-test("backup migration preserves intentional Advance as non-transferable", () => {
+test("backup migration preserves payment-group coverage from intentional Advance", () => {
   const context = createAppContext();
   setAppState(
     context,
@@ -3400,15 +3475,16 @@ test("backup migration preserves intentional Advance as non-transferable", () =>
   );
 
   assert.equal(run(context, 'state.paymentTransactions[0].separateAdvance'), true);
-  assert.equal(run(context, 'playerRemainingAdvance("payer")'), 80);
+  assert.equal(run(context, 'playerRemainingAdvance("payer")'), 40);
   assert.equal(run(context, 'playerRemainingCredit("payer")'), 0);
+  assert.equal(run(context, 'paymentGroupAdvanceApplied(getPaymentGroup("advance-group"))'), 40);
   assert.equal(run(context, 'paymentGroupCreditApplied(getPaymentGroup("advance-group"))'), 0);
-  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("advance-group"))'), 40);
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("advance-group"))'), 0);
 
   run(context, 'state = migrateState(JSON.parse(JSON.stringify(state)), { useSeedCollections: false })');
   assert.equal(run(context, 'state.paymentTransactions[0].separateAdvance'), true);
-  assert.equal(run(context, 'playerRemainingAdvance("payer")'), 80);
-  assert.equal(run(context, 'playerBalance("member")'), 40);
+  assert.equal(run(context, 'playerRemainingAdvance("payer")'), 40);
+  assert.equal(run(context, 'playerBalance("member")'), 0);
 });
 
 test("Version 1.0.3 credit-use records migrate back to derived Credit coverage", () => {
@@ -3513,13 +3589,130 @@ test("individual cash receipts keep reversible audit history", () => {
   assert.match(result.transaction.createdAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   assert.equal(run(context, 'state.paymentTransactions.length'), 1);
   assert.equal(run(context, 'playerRemainingCredit("payer")'), 10);
-  assert.equal(run(context, 'deletePaymentTransaction(state.paymentTransactions[0].id)'), true);
+  assert.equal(run(context, 'reversePaymentTransaction(state.paymentTransactions[0].id)'), true);
   assert.equal(run(context, 'state.paymentTransactions.length'), 1);
   assert.equal(run(context, 'state.paymentTransactions[0].status'), "reversed");
   assert.equal(run(context, 'state.sessions[0].payments.payer.paidAmount'), 0);
   assert.equal(run(context, 'playerRemainingCredit("payer")'), 0);
   assert.equal(run(context, 'playerBalance("payer")'), 20);
   assert.match(run(context, 'playerPaymentTransactionCopyLines("payer")[0]'), /\[REVERSED\]/);
+});
+
+test("active transaction trash offers Delete and Reverse with distinct audit outcomes", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Payer")],
+      sessions: [
+        baseSession({
+          id: "transaction-choice-session",
+          responses: [{
+            id: "transaction-choice-response",
+            playerId: "payer",
+            voteOrder: 1,
+            attendanceChoice: "in",
+            guestCount: 0,
+            racketNeeded: false,
+            rawOptions: ["I'm in"]
+          }]
+        })
+      ]
+    })
+  );
+  run(context, 'showToast = () => {}; saveState = () => {}; render = () => {}');
+
+  const transactionId = run(context, 'applyPlayerPayment("payer", 30).transaction.id');
+  run(context, 'modal = { type: "paymentHistory", playerId: "payer" }');
+  assert.equal(run(context, `openPaymentTransactionActions(state.paymentTransactions.find((transaction) => transaction.id === ${JSON.stringify(transactionId)}))`), true);
+  const dialogHtml = run(context, 'renderDeleteConfirmModal(modal)');
+  assert.match(dialogHtml, /data-delete-type="payment-transaction"[^>]*>Reverse<\/button>/);
+  assert.match(dialogHtml, /data-delete-type="active-payment-transaction"[^>]*>Delete<\/button>/);
+  assert.ok(dialogHtml.indexOf(">Reverse</button>") < dialogHtml.indexOf(">Delete</button>"));
+  assert.match(dialogHtml, /keeps a reversed audit row/);
+  assert.match(dialogHtml, /permanently removes the row/);
+
+  context.__deleteTarget = { dataset: { deleteType: "active-payment-transaction", transaction: transactionId } };
+  assert.equal(run(context, 'executeConfirmedDelete(__deleteTarget)'), true);
+  assert.equal(run(context, 'state.paymentTransactions.length'), 0);
+  assert.equal(run(context, 'state.sessions[0].payments.payer.paidAmount'), 0);
+  assert.equal(run(context, 'playerRemainingCredit("payer")'), 0);
+  assert.equal(run(context, 'playerBalance("payer")'), 20);
+  assert.equal(run(context, 'modal.type'), "paymentHistory");
+});
+
+test("reversed payment records can be permanently deleted without changing balances", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Payer")],
+      sessions: [
+        baseSession({
+          id: "purge-session",
+          responses: [{
+            id: "purge-response",
+            playerId: "payer",
+            voteOrder: 1,
+            attendanceChoice: "in",
+            guestCount: 0,
+            racketNeeded: false,
+            rawOptions: ["I'm in"]
+          }]
+        })
+      ]
+    })
+  );
+  run(context, 'showToast = () => {}; saveState = () => {}; render = () => {}');
+
+  const transactionId = run(context, 'applyPlayerPayment("payer", 30).transaction.id');
+  assert.equal(run(context, `deleteReversedPaymentTransaction(${JSON.stringify(transactionId)})`), false);
+  assert.equal(run(context, `reversePaymentTransaction(${JSON.stringify(transactionId)})`), true);
+  const afterReverse = jsonValue(context, `({
+    balance: playerBalance("payer"),
+    credit: playerRemainingCredit("payer"),
+    paidAmount: state.sessions[0].payments.payer.paidAmount,
+    status: state.sessions[0].payments.payer.status,
+    stage: state.sessions[0].stage
+  })`);
+  assert.match(run(context, 'renderPaymentHistoryModal("payer")'), /data-action="delete-reversed-payment-transaction"/);
+
+  run(context, 'modal = { type: "confirmDelete", previousModal: { type: "paymentHistory", playerId: "payer" } }');
+  context.__deleteTarget = { dataset: { deleteType: "reversed-payment-transaction", transaction: transactionId } };
+  assert.equal(run(context, 'executeConfirmedDelete(__deleteTarget)'), true);
+  assert.equal(run(context, 'state.paymentTransactions.length'), 0);
+  assert.deepEqual(jsonValue(context, `({
+    balance: playerBalance("payer"),
+    credit: playerRemainingCredit("payer"),
+    paidAmount: state.sessions[0].payments.payer.paidAmount,
+    status: state.sessions[0].payments.payer.status,
+    stage: state.sessions[0].stage
+  })`), afterReverse);
+  assert.equal(run(context, 'modal.type'), "paymentHistory");
+  assert.equal(run(context, `deleteReversedPaymentTransaction(${JSON.stringify(transactionId)})`), false);
+});
+
+test("permanent transaction cleanup rejects active, migrated, and non-payment audit records", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Payer")],
+      paymentTransactions: [
+        { id: "active-payment", type: "player-payment", date: isoDateFromToday(-1), paidById: "payer", playerIds: ["payer"], amountPaid: 20, allocations: [] },
+        { id: "migrated-payment", type: "group-payment", date: isoDateFromToday(-1), paidById: "payer", playerIds: ["payer"], status: "migrated", amountPaid: 0, allocations: [] },
+        { id: "reversed-adjustment", type: "session-payment-adjustment", date: isoDateFromToday(-1), paidById: "payer", playerIds: ["payer"], status: "reversed", reversedAt: new Date().toISOString(), allocations: [] }
+      ]
+    })
+  );
+
+  assert.equal(run(context, 'deleteReversedPaymentTransaction("active-payment")'), false);
+  assert.equal(run(context, 'deleteReversedPaymentTransaction("migrated-payment")'), false);
+  assert.equal(run(context, 'deleteReversedPaymentTransaction("reversed-adjustment")'), false);
+  assert.equal(run(context, 'reversePaymentTransaction("migrated-payment")'), false);
+  assert.equal(run(context, 'reversePaymentTransaction("reversed-adjustment")'), false);
+  assert.equal(run(context, 'state.paymentTransactions.length'), 3);
+  assert.doesNotMatch(run(context, 'renderPlayerPaymentTransactionItem("payer", state.paymentTransactions[1])'), /delete-reversed-payment-transaction/);
 });
 
 test("derived payment-group Credit locks roster changes only while coverage is active", () => {
@@ -3602,6 +3795,55 @@ test("activity group-Credit coverage prevents deleting the covered member", () =
   assert.equal(run(context, 'playerHasFinancialHistory("member")'), false);
 });
 
+test("payment-group payer Advance covers member activity shares and dashboard totals", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Yogesh"), player("member", "Abhineya")],
+      paymentGroups: [
+        { id: "activity-advance-group", name: "Yogesh", payerId: "payer", playerIds: ["payer", "member"], guests: [], active: true }
+      ],
+      activities: [
+        {
+          id: "activity-advance-guard",
+          name: "Dinner",
+          date: isoDateFromToday(-1),
+          totalPaid: 40,
+          paidById: "payer",
+          playerIds: ["payer", "member"],
+          shares: {
+            payer: { playerId: "payer", amount: 20, paidAmount: 20, paidBySelf: true, status: "Paid" },
+            member: { playerId: "member", amount: 20, paidAmount: 0, paidBySelf: false, status: "Pending" }
+          }
+        }
+      ]
+    })
+  );
+  run(context, 'recordPlayerAdvance("payer", 50)');
+
+  const coverage = jsonValue(context, 'shareCoverageDetails(state.activities[0], state.activities[0].shares.member)');
+  assert.equal(coverage.groupAdvanceApplied, 20);
+  assert.equal(coverage.outstanding, 0);
+  assert.equal(run(context, 'playerRemainingAdvance("payer")'), 30);
+  assert.equal(run(context, 'playerBalance("member")'), 0);
+  assert.equal(run(context, 'activityPlayerHasActiveFinancialState(state.activities[0], "member")'), true);
+  assert.deepEqual(jsonValue(context, 'dashboardActivityTotals(state.activities)'), {
+    spent: 40,
+    due: 20,
+    cashApplied: 0,
+    advanceApplied: 20,
+    creditApplied: 0,
+    covered: 20,
+    outstanding: 0
+  });
+
+  run(context, 'getPaymentGroup("activity-advance-group").active = false');
+  assert.equal(run(context, 'playerRemainingAdvance("payer")'), 50);
+  assert.equal(run(context, 'playerBalance("member")'), 20);
+  assert.equal(run(context, 'activityPlayerHasActiveFinancialState(state.activities[0], "member")'), false);
+});
+
 test("transaction-owned records can only be reversed by the payer transaction", () => {
   const context = createAppContext();
   setAppState(
@@ -3658,7 +3900,7 @@ test("transaction-owned records can only be reversed by the payer transaction", 
   assert.equal(run(context, 'paymentTransactionIsActive(state.paymentTransactions[0])'), true);
 
   context.__transactionId = result.transaction.id;
-  assert.equal(run(context, 'deletePaymentTransaction(__transactionId)'), true);
+  assert.equal(run(context, 'reversePaymentTransaction(__transactionId)'), true);
   assert.equal(run(context, 'state.sessions[0].payments.payer.paidAmount'), 0);
   assert.equal(run(context, 'state.sessions[0].payments.member.paidAmount'), 0);
 });
@@ -3692,7 +3934,7 @@ test("reversing a receipt unlocks roster edits while retained history blocks ses
   assert.equal(run(context, 'sessionPlayerHasActiveFinancialState(state.sessions[0], "payer")'), true);
   assert.equal(run(context, 'removeResponseGuest(state.sessions[0], "reversed-history-response")'), false);
   context.__transactionId = transactionId;
-  assert.equal(run(context, 'deletePaymentTransaction(__transactionId)'), true);
+  assert.equal(run(context, 'reversePaymentTransaction(__transactionId)'), true);
   assert.equal(run(context, 'sessionPlayerHasActiveFinancialState(state.sessions[0], "payer")'), false);
   assert.equal(run(context, 'sessionPlayerHasFinancialHistory(state.sessions[0], "payer")'), true);
   assert.equal(run(context, 'removeResponseGuest(state.sessions[0], "reversed-history-response")'), true);
@@ -4200,6 +4442,9 @@ test("shared icon actions and compact payment group controls keep stable dimensi
   const mobilePlayerBalanceActions = block(/@media \(max-width:\s*640px\)[\s\S]*?\.player-balance-actions\s*\{[^}]+\}/);
   const playerBalanceChips = block(/\.player-balance-chips\s*\{[^}]+\}/);
   const playerBalanceChipPair = block(/\.player-balance-chip-pair\s*\{[^}]+\}/);
+  const transactionChoiceActions = block(/\.transaction-choice-actions\s*\{[^}]+\}/);
+  const transactionChoiceButton = block(/\.transaction-choice-actions \.btn\s*\{[^}]+\}/);
+  const narrowTransactionChoiceButton = block(/@media \(max-width:\s*374px\)[\s\S]*?\.transaction-choice-actions \.btn\s*\{[^}]+\}/);
 
   assertSquare(block(/(?:^|\n)\.btn\.icon-only\s*\{[^}]+\}/), 44);
   assertSquare(block(/(?:^|\n)\.icon-button\s*\{[^}]+\}/), 44);
@@ -4259,6 +4504,14 @@ test("shared icon actions and compact payment group controls keep stable dimensi
   assert.match(playerBalanceChips, /flex:\s*1 1 100%/);
   assert.match(playerBalanceChipPair, /display:\s*inline-flex/);
   assert.match(playerBalanceChipPair, /white-space:\s*nowrap/);
+  assert.match(transactionChoiceActions, /grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(transactionChoiceActions, /width:\s*100%/);
+  assert.match(transactionChoiceButton, /min-width:\s*0/);
+  assert.match(transactionChoiceButton, /width:\s*100%/);
+  assert.match(transactionChoiceButton, /white-space:\s*nowrap/);
+  assert.match(narrowTransactionChoiceButton, /padding-right:\s*5px/);
+  assert.match(narrowTransactionChoiceButton, /padding-left:\s*5px/);
+  assert.match(narrowTransactionChoiceButton, /font-size:\s*0\.86rem/);
   assert.match(css, /@media \(max-width:\s*640px\)[\s\S]*?\.modal-card \.btn:not\(\.icon-only\):not\(\.icon-button\)\s*\{[^}]*min-height:\s*56px/);
   assert.match(css, /@media \(min-width:\s*390px\) and \(max-width:\s*430px\)[\s\S]*?\.modal-card \.btn:not\(\.icon-only\):not\(\.icon-button\)\s*\{[^}]*min-height:\s*56px !important/);
 });
