@@ -1299,6 +1299,10 @@ async function handleSubmit(event) {
       stage: normalizeStage(data.stage || existingSession?.stage || "Draft"),
       bookingStatus: bookedCourts > 0 ? "Pre-booked" : "Planned"
     };
+    if (!existingSession) {
+      sessionData.organizerPlayerId = String(state.settings?.organizerPlayerId || "");
+      sessionData.coOrganizerPlayerId = String(state.settings?.coOrganizerPlayerId || "");
+    }
     let session = existingSession;
     if (existingSession) {
       const changedFinancialBasis = sessionFinancialBasisChanged(existingSession, sessionData);

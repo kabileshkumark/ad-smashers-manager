@@ -2602,6 +2602,127 @@ test("organizer free seat still charges organizer guests", () => {
   assert.equal(run(context, "dashboardFinanceSnapshot(state.sessions).organizerChargeTotal"), -100);
 });
 
+test("session role snapshots preserve exemptions and covered totals when Settings roles change", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      settings: { organizerPlayerId: "org", coOrganizerPlayerId: "co" },
+      players: [
+        player("org", "Organizer", "Intermediate"),
+        player("co", "Co-organizer", "Intermediate"),
+        player("next", "Next Organizer", "Intermediate")
+      ],
+      sessions: [
+        baseSession({
+          id: "covered-session",
+          perPersonAmount: 25,
+          responses: [
+            {
+              id: "response-org",
+              playerId: "org",
+              voteOrder: 1,
+              attendanceChoice: "in_plus_1",
+              guestCount: 1,
+              racketNeeded: false,
+              rawOptions: ["I'm in +1"]
+            },
+            {
+              id: "response-co",
+              playerId: "co",
+              voteOrder: 2,
+              attendanceChoice: "in",
+              guestCount: 0,
+              racketNeeded: false,
+              rawOptions: ["I'm in"]
+            }
+          ]
+        })
+      ]
+    })
+  );
+
+  assert.equal(run(context, "state.sessions[0].organizerPlayerId"), "org");
+  assert.equal(run(context, "state.sessions[0].coOrganizerPlayerId"), "co");
+  assert.equal(run(context, "state.sessions[0].payments.org.amount"), 25);
+  assert.equal(run(context, "Boolean(state.sessions[0].payments.co)"), false);
+  assert.equal(run(context, 'playerSessionRoleCoveredAmount("org")'), 25);
+  assert.equal(run(context, 'playerSessionRoleCoveredAmount("co")'), 25);
+
+  run(
+    context,
+    `
+      state.settings.organizerPlayerId = "next";
+      state.settings.coOrganizerPlayerId = "";
+      syncSessionPayments(state.sessions[0]);
+    `
+  );
+
+  assert.equal(run(context, "state.sessions[0].payments.org.amount"), 25);
+  assert.equal(run(context, "Boolean(state.sessions[0].payments.co)"), false);
+  assert.equal(run(context, "Boolean(state.sessions[0].payments.next)"), false);
+  assert.equal(run(context, 'playerSessionRoleCoveredAmount("org")'), 25);
+  assert.equal(run(context, 'playerSessionRoleCoveredAmount("co")'), 25);
+  assert.equal(run(context, 'playerSessionRoleCoveredAmount("next")'), 0);
+
+  run(context, 'state = migrateState(JSON.parse(JSON.stringify(state)), { useSeedCollections: false })');
+  assert.equal(run(context, "state.sessions[0].organizerPlayerId"), "org");
+  assert.equal(run(context, "state.sessions[0].coOrganizerPlayerId"), "co");
+  assert.equal(run(context, "state.sessions[0].payments.org.amount"), 25);
+  assert.equal(run(context, 'playerSessionRoleCoveredAmount("org")'), 25);
+});
+
+test("role Covered chip counts only attended collectible session seats", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      settings: { organizerPlayerId: "org" },
+      players: [player("org", "Organizer"), player("other", "Other Player")],
+      sessions: [
+        baseSession({
+          id: "past-attended",
+          perPersonAmount: 20,
+          responses: [{ id: "past-org", playerId: "org", voteOrder: 1, attendanceChoice: "in", guestCount: 0, racketNeeded: false, rawOptions: ["I'm in"] }]
+        }),
+        baseSession({
+          id: "past-not-attended",
+          perPersonAmount: 30,
+          responses: [{ id: "past-other", playerId: "other", voteOrder: 1, attendanceChoice: "in", guestCount: 0, racketNeeded: false, rawOptions: ["I'm in"] }]
+        }),
+        baseSession({
+          id: "future-attended",
+          date: isoDateFromToday(7),
+          perPersonAmount: 40,
+          responses: [{ id: "future-org", playerId: "org", voteOrder: 1, attendanceChoice: "in", guestCount: 0, racketNeeded: false, rawOptions: ["I'm in"] }]
+        })
+      ],
+      activities: [{
+        id: "activity-covered-exclusion",
+        name: "Dinner",
+        date: isoDateFromToday(-1),
+        totalPaid: 50,
+        paidById: "other",
+        settlementOwnerId: "other",
+        playerIds: ["org", "other"],
+        shares: {
+          org: { playerId: "org", amount: 25, paidAmount: 25, status: "Paid" },
+          other: { playerId: "other", amount: 25, paidAmount: 0, status: "Paid" }
+        }
+      }]
+    })
+  );
+
+  assert.equal(run(context, 'playerSessionRoleCoveredAmount("org")'), 20);
+  assert.equal(run(context, 'playerCoveredAmount("org")'), 25);
+  const organizerHtml = run(context, 'renderPlayerBalanceRow(getPlayer("org"))');
+  assert.match(organizerHtml, /Settled 25 AED/);
+  assert.match(organizerHtml, /badge violet[^>]*>Covered 20 AED/);
+
+  const otherHtml = run(context, 'renderPlayerBalanceRow(getPlayer("other"))');
+  assert.doesNotMatch(otherHtml, />Covered /);
+});
+
 test("upcoming sessions are excluded from balances and pending payment stats", () => {
   const context = createAppContext();
   setAppState(

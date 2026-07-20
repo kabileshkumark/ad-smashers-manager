@@ -210,7 +210,7 @@ function removeManualAttendedPlayer(session, playerId, playersList = state.playe
 
 function paymentPlayerIds(session, playersList = state.players, settings = state.settings) {
   const ids = effectiveAttendedPlayerIds(session, playersList);
-  const freeIds = roleFreePlayerIds(settings);
+  const freeIds = sessionRoleFreePlayerIds(session, settings);
   return uniqueIds(ids).filter((id) => {
     const activePlayer = playersList.some((player) => player.id === id && player.active !== false);
     if (!activePlayer) return false;
@@ -230,7 +230,7 @@ function sessionPaymentGuestCount(session, playerId, playersList = state.players
 
 function sessionPaymentChargeableUnits(session, playerId, playersList = state.players, settings = state.settings) {
   const units = sessionPaymentUnits(session, playerId, playersList);
-  const freeIds = roleFreePlayerIds(settings);
+  const freeIds = sessionRoleFreePlayerIds(session, settings);
   return freeIds.includes(playerId) ? Math.max(0, units - 1) : units;
 }
 

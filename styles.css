@@ -2270,6 +2270,12 @@ img {
   background: #e4eeff;
 }
 
+.badge.violet {
+  color: #55348f;
+  border-color: rgba(111, 72, 174, 0.24);
+  background: #f0eaff;
+}
+
 .badge.green {
   color: #0f4d36;
   border-color: rgba(32, 129, 95, 0.22);

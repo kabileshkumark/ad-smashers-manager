@@ -335,6 +335,12 @@ function normalizeSession(session, settings = state?.settings || {}) {
     session.shuttleCost ?? settings.defaultShuttleCost
   );
   const recurrence = normalizeSessionRecurrence(session.recurrence);
+  const organizerPlayerId = Object.prototype.hasOwnProperty.call(session, "organizerPlayerId")
+    ? String(session.organizerPlayerId || "")
+    : String(settings.organizerPlayerId || "");
+  const coOrganizerPlayerId = Object.prototype.hasOwnProperty.call(session, "coOrganizerPlayerId")
+    ? String(session.coOrganizerPlayerId || "")
+    : String(settings.coOrganizerPlayerId || "");
   const normalized = {
     ...session,
     type,
@@ -348,6 +354,8 @@ function normalizeSession(session, settings = state?.settings || {}) {
     expectedPlayers,
     waterCost,
     perPersonAmount: storedNumberOrFallback(session.perPersonAmount, fallbackPerPersonAmount),
+    organizerPlayerId,
+    coOrganizerPlayerId,
     responses: orderedSessionResponses({ responses: session.responses || [] }).map((response, index) => ({
       ...response,
       voteOrder: index + 1
@@ -816,8 +824,14 @@ function playerRoleConfig(role) {
   return configs[role] || configs.organizer;
 }
 
-function roleFreePlayerIds(settings = state.settings) {
-  return uniqueIds([settings?.organizerPlayerId, settings?.coOrganizerPlayerId]);
+function sessionRoleFreePlayerIds(session, settings = state.settings) {
+  const organizerPlayerId = Object.prototype.hasOwnProperty.call(session || {}, "organizerPlayerId")
+    ? session.organizerPlayerId
+    : settings?.organizerPlayerId;
+  const coOrganizerPlayerId = Object.prototype.hasOwnProperty.call(session || {}, "coOrganizerPlayerId")
+    ? session.coOrganizerPlayerId
+    : settings?.coOrganizerPlayerId;
+  return uniqueIds([organizerPlayerId, coOrganizerPlayerId]);
 }
 
 function playerRoleLabels(playerId, settings = state.settings) {

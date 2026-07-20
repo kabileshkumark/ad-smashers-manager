@@ -8,6 +8,7 @@ function matchesSearch(text, searchTerm) {
 
 function playerBalanceSearchText(player) {
   const ledger = playerLedger(player.id);
+  const roleCovered = playerSessionRoleCoveredAmount(player.id);
   return [
     player.name,
     player.displayName,
@@ -17,6 +18,7 @@ function playerBalanceSearchText(player) {
     currency(playerBalance(player.id)),
     playerAvailableAdvance(player.id) ? currency(playerAvailableAdvance(player.id)) : "",
     currency(playerCoveredAmount(player.id)),
+    roleCovered ? `covered ${currency(roleCovered)}` : "",
     ...ledger.map((item) => `${item.label} ${currency(item.outstanding)}`)
   ].join(" ");
 }
@@ -861,6 +863,7 @@ function renderPlayerBalanceRow(player) {
   const historyItems = playerPaymentCorrectionItems(player.id);
   const historyTransactions = playerPaymentTransactions(player.id);
   const covered = playerCoveredAmount(player.id);
+  const roleCovered = playerSessionRoleCoveredAmount(player.id);
   const remainingAdvance = playerRemainingAdvance(player.id);
   const remainingCredit = playerRemainingCredit(player.id);
   const due = playerBalance(player.id);
@@ -873,6 +876,7 @@ function renderPlayerBalanceRow(player) {
             <h3 class="row-title">${escapeHtml(playerLabel)}</h3>
             <div class="player-balance-chips" aria-label="Payment summary for ${escapeAttr(playerLabel)}">
               <span class="badge green">Settled ${currency(covered)}</span>
+              ${roleCovered > 0 ? `<span class="badge violet">Covered ${currency(roleCovered)}</span>` : ""}
               ${remainingAdvance > 0 ? `<span class="badge blue">Advance ${currency(remainingAdvance)}</span>` : ""}
               <span class="player-balance-chip-pair">
                 <span class="badge ${due ? "gold" : "green"}">${due ? `Due ${currency(due)}` : "Clear"}</span>
