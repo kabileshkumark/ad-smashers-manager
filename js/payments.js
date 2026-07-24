@@ -540,13 +540,26 @@ function activityPlayerHasActiveFinancialState(activity, playerId) {
   );
 }
 
-function sessionPlayerHasActiveFinancialState(session, playerId) {
+function sessionPlayerHasRecordedFinancialState(session, playerId) {
   const payment = session?.payments?.[playerId];
   return Boolean(
     Number(payment?.paidAmount || 0) > 0
     || Number(payment?.advanceAmount || 0) > 0
-    || (payment && paymentCoverageApplied(session, payment) > 0)
     || paymentHasActiveTransactionAllocation(session?.id, playerId)
+  );
+}
+
+function sessionHasRecordedFinancialState(session) {
+  if (!session) return false;
+  return Object.keys(session.payments || {}).some((playerId) => sessionPlayerHasRecordedFinancialState(session, playerId))
+    || paymentHasActiveTransactionAllocation(session.id);
+}
+
+function sessionPlayerHasActiveFinancialState(session, playerId) {
+  const payment = session?.payments?.[playerId];
+  return Boolean(
+    sessionPlayerHasRecordedFinancialState(session, playerId)
+    || (payment && paymentCoverageApplied(session, payment) > 0)
   );
 }
 
