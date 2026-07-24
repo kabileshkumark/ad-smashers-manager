@@ -1,6 +1,6 @@
 # Payment Lifecycle and Ledger Invariants
 
-**Status:** Released rule set for technical build 1.0.8; production verified under ADS-16
+**Status:** Released rule set for technical build 1.0.10; production verified under ADS-18
 
 **Formal release:** Version 1.0
 
@@ -156,8 +156,8 @@ The baseline audit used the Version 1.0.3 implementation, its 95 regression test
 | PAY-01 | Critical | Group Credit is only previewed on the group card. Sessions, player balances, reminders, session completion, and Dashboard retain the member due. | One canonical snapshot supplies every consumer. |
 | PAY-02 | Critical | A zero-cash group action writes Credit into `paidAmount`, classifying Credit as cash. | Derived Credit never mutates cash or creates a zero-cash transaction. |
 | PAY-03 | High | The same payer Credit can be reserved independently by multiple groups. AED 60 can display as covering AED 80. | Credit is reserved once globally in persisted group order. |
-| PAY-04 | High | Attendance or roster changes can delete a paid charge and leave Credit or transaction data detached. | Active cash, Advance, or Credit blocks charge-basis edits until reversal. |
-| PAY-05 | High | Charge decreases do not reconcile cash and Credit. A paid AED 40 charge reduced to AED 30 can retain AED 40 paid plus only AED 10 Credit. | Rate and roster changes require active coverage to be reversed first. |
+| PAY-04 | High | Attendance or roster changes can delete a paid charge and leave Credit or transaction data detached. | Active cash or derived coverage continues to block destructive roster changes; retained history blocks hard deletion. |
+| PAY-05 | High | Charge corrections either retain excess receipt cash incorrectly or become impossible when only recalculable coverage exists. | Recorded cash and active transaction allocations require reversal or deletion; derived Advance and Credit automatically reflow through the canonical ledger. |
 | PAY-06 | High | Individual payments are aggregated into the charge and do not retain one transaction per receipt. | Every receipt has an immutable timestamped transaction and exact allocations. |
 | PAY-07 | High | Deleting a session can leave group transaction allocations pointing to a missing charge. | Retained transaction references block hard deletion after reversal. |
 | PAY-08 | Medium | Adding Advance can make every payment effectively paid without updating the stored session stage or dashboard pipeline. | Canonical coverage synchronizes session stage and pipeline state. |
@@ -199,5 +199,18 @@ Backup-specific evidence:
 | Responsive QA | Desktop, 390 x 844, and 320 x 760 passed with split icons in one row, no horizontal overflow, and no browser errors. |
 | Release integrity | Approved candidate tree equals merged source `134b621`; GitHub CI passed on PR #18. |
 | Production | Firebase Hosting only; HTTP 200, live version 1.0.8, active service worker, and no smoke-test errors. |
+
+## Build 1.0.10 Verification
+
+| Gate | Evidence |
+| --- | --- |
+| Automated regression | 149 tests pass, including derived Advance, payment-group Credit, recorded cash, active transaction allocation, roster protection, history, and canonical coverage. |
+| Build | `npm run build` synchronized the application, manifest, service-worker cache, and Hosting assets to 1.0.10. |
+| Restore point | `ad-smashers-backup-2026-07-24.json`, 187362 bytes, SHA-256 `35dfb617e5abeaadcccde40e8104a222eac11819d4a65a64c5bd0714da192606`. |
+| Backup replay | The 23 July session defect reproduced in a local-only context with production writes disabled. |
+| Corrected behavior | Derived Advance/Credit recalculates after a session correction; recorded cash and active transaction allocations still block financial-basis mutation. |
+| Release integrity | Approved candidate and merged `main` trees match; GitHub CI passed on PR #21. |
+| Production | Firebase Hosting released 22 files; live `APP_VERSION` is 1.0.10; no Firestore component was deployed. |
+| Cleanup | Browser storage, service worker, caches, temporary files, and port 4173 were cleared. |
 
 Production deployment and smoke-test evidence are recorded in Jira and Confluence for Version 1.0.
