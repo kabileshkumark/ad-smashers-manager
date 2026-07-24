@@ -1455,6 +1455,15 @@ function playerCoveredAmount(playerId) {
   return Number((sessionCovered + activityCovered).toFixed(2));
 }
 
+function playerSessionRoleCoveredAmount(playerId) {
+  const covered = sortSessions()
+    .filter((session) => sessionIsCollectible(session))
+    .filter((session) => sessionRoleFreePlayerIds(session).includes(playerId))
+    .filter((session) => effectiveAttendedPlayerIds(session).includes(playerId))
+    .reduce((total, session) => total + Math.max(0, Number(session.perPersonAmount || 0)), 0);
+  return Number(covered.toFixed(2));
+}
+
 function playerNetBalance(playerId) {
   const summary = ledgerCoverageSnapshot().players.get(playerId);
   if (!summary) return 0;
