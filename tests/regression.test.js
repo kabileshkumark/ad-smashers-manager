@@ -4713,6 +4713,11 @@ test("derived payment-group Credit locks roster changes only while coverage is a
 
   assert.equal(run(context, 'paymentCoverageApplied(state.sessions[0], state.sessions[0].payments.member)'), 40);
   assert.equal(run(context, 'sessionPlayerHasActiveFinancialState(state.sessions[0], "member")'), true);
+  assert.equal(run(context, 'sessionHasRecordedFinancialState(state.sessions[0])'), false);
+  assert.equal(run(context, 'updateSessionPerPersonAmount(state.sessions[0], 25)'), true);
+  assert.equal(run(context, 'state.sessions[0].payments.member.amount'), 50);
+  assert.equal(run(context, 'paymentCoverageApplied(state.sessions[0], state.sessions[0].payments.member)'), 40);
+  assert.equal(run(context, 'updateSessionPerPersonAmount(state.sessions[0], 20)'), true);
   assert.equal(run(context, 'removeResponseGuest(state.sessions[0], "credit-guard-response")'), false);
   assert.equal(run(context, 'state.sessions[0].responses[0].guestCount'), 1);
 
@@ -4721,6 +4726,80 @@ test("derived payment-group Credit locks roster changes only while coverage is a
   assert.equal(run(context, 'removeResponseGuest(state.sessions[0], "credit-guard-response")'), true);
   assert.equal(run(context, 'state.sessions[0].responses[0].guestCount'), 0);
   assert.equal(run(context, 'state.sessions[0].payments.member.amount'), 20);
+});
+
+test("derived Advance coverage recalculates when a session financial basis changes", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("member", "Nithish")],
+      sessions: [
+        baseSession({
+          id: "extended-session",
+          responses: [{
+            id: "member-response",
+            playerId: "member",
+            voteOrder: 1,
+            attendanceChoice: "in",
+            guestCount: 0,
+            racketNeeded: false,
+            rawOptions: ["I'm in"]
+          }]
+        })
+      ]
+    })
+  );
+  run(context, 'recordPlayerAdvance("member", 20)');
+
+  assert.equal(run(context, 'sessionHasActiveFinancialState(state.sessions[0])'), true);
+  assert.equal(run(context, 'sessionHasRecordedFinancialState(state.sessions[0])'), false);
+  assert.equal(run(context, 'paymentCoverageDetails(state.sessions[0], state.sessions[0].payments.member).advanceApplied'), 20);
+  assert.equal(run(context, 'paymentCoverageApplied(state.sessions[0], state.sessions[0].payments.member)'), 20);
+  assert.equal(run(context, 'updateSessionPerPersonAmount(state.sessions[0], 30)'), true);
+  assert.equal(run(context, 'state.sessions[0].payments.member.amount'), 30);
+  assert.equal(run(context, 'paymentCoverageApplied(state.sessions[0], state.sessions[0].payments.member)'), 20);
+  assert.equal(run(context, 'paymentOutstandingAfterCoverage(state.sessions[0].payments.member, state.sessions[0])'), 10);
+});
+
+test("recorded session payments still lock financial basis changes", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("member", "Member")],
+      sessions: [
+        baseSession({
+          responses: [{
+            id: "member-response",
+            playerId: "member",
+            voteOrder: 1,
+            attendanceChoice: "in",
+            guestCount: 0,
+            racketNeeded: false,
+            rawOptions: ["I'm in"]
+          }],
+          payments: {
+            member: {
+              playerId: "member",
+              status: "Paid",
+              amount: 20,
+              paidAmount: 20,
+              advanceAmount: 0,
+              method: "Bank",
+              paidDate: isoDateFromToday(-1),
+              notes: ""
+            }
+          }
+        })
+      ]
+    })
+  );
+
+  assert.equal(run(context, 'sessionPlayerHasRecordedFinancialState(state.sessions[0], "member")'), true);
+  assert.equal(run(context, 'sessionHasRecordedFinancialState(state.sessions[0])'), true);
+  assert.equal(run(context, 'updateSessionPerPersonAmount(state.sessions[0], 30)'), false);
+  assert.equal(run(context, 'state.sessions[0].perPersonAmount'), 20);
 });
 
 test("activity group-Credit coverage prevents deleting the covered member", () => {
@@ -4851,6 +4930,7 @@ test("transaction-owned records can only be reversed by the payer transaction", 
   const result = jsonValue(context, 'applyGroupPayment({ paidById: "payer", playerIds: ["payer", "member"], amountPaid: 40 })');
   assert.match(result.transaction.createdAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   assert.equal(run(context, 'paymentHasActiveTransactionAllocation("transaction-owned-session", "member")'), true);
+  assert.equal(run(context, 'sessionHasRecordedFinancialState(state.sessions[0])'), true);
   assert.doesNotMatch(run(context, 'renderPaymentHistoryModal("member")'), /data-action="delete-payment-transaction"/);
   assert.doesNotMatch(run(context, 'renderPaymentHistoryModal("member")'), /data-action="delete-payment-history"/);
   assert.match(run(context, 'renderPaymentHistoryModal("payer")'), /data-action="delete-payment-transaction"/);
@@ -4869,6 +4949,7 @@ test("transaction-owned records can only be reversed by the payer transaction", 
 
   context.__transactionId = result.transaction.id;
   assert.equal(run(context, 'reversePaymentTransaction(__transactionId)'), true);
+  assert.equal(run(context, 'sessionHasRecordedFinancialState(state.sessions[0])'), false);
   assert.equal(run(context, 'state.sessions[0].payments.payer.paidAmount'), 0);
   assert.equal(run(context, 'state.sessions[0].payments.member.paidAmount'), 0);
 });

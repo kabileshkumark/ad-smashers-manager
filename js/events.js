@@ -20,8 +20,8 @@ function setSessionField(sessionId, fieldName, value) {
   const session = getSession(sessionId);
   const numeric = ["plannedCourts", "bookedCourts", "playersPerCourt", "expectedPlayers", "totalPaid", "perPersonAmount", "shuttleCost", "waterCost"];
   const financialFields = new Set(["date", "startTime", "endTime", "courtId", "bookedCourts", "expectedPlayers", "totalPaid", "perPersonAmount", "shuttleCost", "waterCost"]);
-  if (financialFields.has(fieldName) && sessionHasActiveFinancialState(session)) {
-    showToast("Clear active cash, Advance, or Credit coverage before changing this session's financial basis.");
+  if (financialFields.has(fieldName) && sessionHasRecordedFinancialState(session)) {
+    showToast("Reverse or delete recorded payments before changing this session's financial basis.");
     render();
     return false;
   }
@@ -1306,8 +1306,11 @@ async function handleSubmit(event) {
     let session = existingSession;
     if (existingSession) {
       const changedFinancialBasis = sessionFinancialBasisChanged(existingSession, sessionData);
-      if (changedFinancialBasis && sessionHasActiveFinancialState(existingSession)) {
-        showToast("Clear active cash, Advance, or Credit coverage before changing this session's financial basis.");
+      const recalculatesDerivedCoverage = changedFinancialBasis
+        && sessionHasActiveFinancialState(existingSession)
+        && !sessionHasRecordedFinancialState(existingSession);
+      if (changedFinancialBasis && sessionHasRecordedFinancialState(existingSession)) {
+        showToast("Reverse or delete recorded payments before changing this session's financial basis.");
         render();
         return;
       }
@@ -1316,7 +1319,9 @@ async function handleSubmit(event) {
       updateSessionPerPersonAmount(existingSession, sessionData.perPersonAmount);
       applyAutomaticSessionStage(existingSession);
       syncSessionPayments(existingSession);
-      showToast("Session updated.");
+      showToast(recalculatesDerivedCoverage
+        ? "Session updated. Advance and Credit coverage recalculated."
+        : "Session updated.");
     } else {
       const creation = buildNewSessionRecords(
         { ...sessionData, pollStatus: "Draft" },

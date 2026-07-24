@@ -761,8 +761,8 @@ function updateSessionPerPersonAmount(session, amount) {
   const nextAmount = Number(amount || 0);
   if (
     Number(session?.perPersonAmount || 0) !== nextAmount
-    && typeof sessionHasActiveFinancialState === "function"
-    && sessionHasActiveFinancialState(session)
+    && typeof sessionHasRecordedFinancialState === "function"
+    && sessionHasRecordedFinancialState(session)
   ) {
     return false;
   }

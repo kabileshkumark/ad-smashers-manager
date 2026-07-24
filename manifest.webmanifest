@@ -2,7 +2,7 @@
   "name": "AD Smashers Manager",
   "short_name": "AD Smashers",
   "description": "Session, court, player, and payment manager for AD Smashers.",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
