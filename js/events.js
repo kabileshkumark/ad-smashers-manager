@@ -474,8 +474,8 @@ function handleClick(event) {
     render();
     return;
   }
-  if (action === "open-payment-group-copy") {
-    modal = { type: "paymentGroupCopy", groupId: actionTarget.dataset.paymentGroup };
+  if (action === "open-payment-group-summary") {
+    modal = { type: "paymentGroupSummary", groupId: actionTarget.dataset.paymentGroup, mode: "summary" };
     render();
     return;
   }
@@ -485,7 +485,7 @@ function handleClick(event) {
     return;
   }
   if (action === "open-player-advance-details") {
-    modal = { type: "advanceDetails", playerId: actionTarget.dataset.player };
+    modal = { type: "advanceDetails", playerId: actionTarget.dataset.player, mode: "latest" };
     render();
     return;
   }
@@ -544,37 +544,40 @@ function handleClick(event) {
     render();
     return;
   }
-  if (action === "open-player-payment-details" || action === "open-player-payment-copy") {
-    modal = { type: "playerPaymentDetails", playerId: actionTarget.dataset.player };
+  if (action === "open-player-payment-summary") {
+    modal = { type: "playerPaymentSummary", playerId: actionTarget.dataset.player, mode: "summary" };
     render();
     return;
   }
-  if (action === "copy-player-payment-history") {
-    copyText(buildPlayerPaymentHistoryCopy(actionTarget.dataset.player), "Payment history copied.");
-    modal = null;
+  if (action === "set-payment-summary-mode" && modal && typeof modal === "object") {
+    modal = { ...modal, mode: actionTarget.dataset.summaryMode || modal.mode };
     render();
     return;
   }
-  if (action === "copy-player-due-history") {
-    copyText(buildPlayerDueHistoryCopy(actionTarget.dataset.player), "Due history copied.");
-    modal = null;
+  if (action === "copy-player-payment-summary") {
+    const mode = actionTarget.dataset.summaryMode === "reminder" ? "reminder" : "summary";
+    const text = mode === "reminder"
+      ? buildPlayerPaymentReminderCopy(actionTarget.dataset.player)
+      : buildPlayerPaymentSummaryCopy(actionTarget.dataset.player);
+    copyText(text, mode === "reminder" ? "Payment reminder copied." : "Payment summary copied.");
     render();
     return;
   }
   if (action === "copy-player-advance-summary") {
-    copyText(buildPlayerAdvanceSummaryCopy(actionTarget.dataset.player), "Advance summary copied.");
+    const mode = actionTarget.dataset.summaryMode === "complete" ? "complete" : "latest";
+    const text = mode === "complete"
+      ? buildPlayerCompleteAdvanceSummaryCopy(actionTarget.dataset.player)
+      : buildPlayerLatestAdvanceSummaryCopy(actionTarget.dataset.player);
+    copyText(text, mode === "complete" ? "Complete Advance summary copied." : "Latest Advance copied.");
     render();
     return;
   }
-  if (action === "copy-payment-group-history") {
-    copyText(buildPaymentGroupPaymentHistoryCopy(actionTarget.dataset.paymentGroup), "Payment history copied.");
-    modal = null;
-    render();
-    return;
-  }
-  if (action === "copy-payment-group-due-history") {
-    copyText(buildPaymentGroupDueHistoryCopy(actionTarget.dataset.paymentGroup), "Due history copied.");
-    modal = null;
+  if (action === "copy-payment-group-summary") {
+    const mode = actionTarget.dataset.summaryMode === "reminder" ? "reminder" : "summary";
+    const text = mode === "reminder"
+      ? buildPaymentGroupReminderCopy(actionTarget.dataset.paymentGroup)
+      : buildPaymentGroupSummaryCopy(actionTarget.dataset.paymentGroup);
+    copyText(text, mode === "reminder" ? "Payment group reminder copied." : "Payment group summary copied.");
     render();
     return;
   }
