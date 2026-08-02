@@ -73,7 +73,8 @@ async function initializeApp() {
       if (cloudStateNeedsMigrationSave) saveState();
     }
   } catch (error) {
-    cloudError = error.message || "Could not load Firestore data.";
+    console.error("App data load failed", error);
+    cloudError = DATA_LOAD_ERROR_MESSAGE;
     cloudLoadFailed = isAuthenticated();
   } finally {
     authLoading = false;

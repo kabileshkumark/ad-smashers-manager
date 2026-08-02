@@ -4,6 +4,7 @@ const MODAL_TEXT_CONTROL_SELECTOR = ".modal-card input:not([type='hidden']), .mo
 const PAGE_TEXT_CONTROL_SELECTOR = "#main-content input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='button']):not([type='submit']), #main-content select, #main-content textarea";
 let appHandoffOverlayTimer = null;
 let modalKeyboardFocusGuardsInstalled = false;
+let keyboardFocusScrollTimers = new Set();
 
 function isAndroidRuntime() {
   return /Android/i.test(navigator.userAgent || "");
@@ -361,14 +362,28 @@ function updateKeyboardControlFocusState(control = document.activeElement) {
   document.body?.classList?.toggle("is-keyboard-control-focused", isFocused);
 }
 
+function clearKeyboardFocusScrollTimers() {
+  keyboardFocusScrollTimers.forEach((timerId) => window.clearTimeout(timerId));
+  keyboardFocusScrollTimers.clear();
+}
+
+function scheduleKeyboardFocusScroll(control, callback, delay) {
+  const timerId = window.setTimeout(() => {
+    keyboardFocusScrollTimers.delete(timerId);
+    if (document.activeElement !== control) return;
+    callback();
+  }, delay);
+  keyboardFocusScrollTimers.add(timerId);
+}
+
 function scrollFocusedModalControlIntoView(control = document.activeElement, delay = 80) {
   const target = modalTextControl(control);
   const modalCard = target?.closest?.(".modal-card");
   if (!target || !modalCard) return false;
   const scrollTarget = target.closest(".field, .activity-player-control, .poll-vote-guest-name-field, .quick-vote-name-field, .payment-group-guest-item") || target;
-  window.setTimeout(() => {
+  scheduleKeyboardFocusScroll(target, () => {
     refreshVisualViewportModalVars();
-    scrollTarget.scrollIntoView?.({ block: "center", inline: "nearest", behavior: "smooth" });
+    scrollTarget.scrollIntoView?.({ block: "center", inline: "nearest", behavior: "auto" });
   }, delay);
   return true;
 }
@@ -378,7 +393,7 @@ function scrollFocusedPageControlIntoView(control = document.activeElement, dela
   const main = target?.closest?.("#main-content");
   if (!target || !main) return false;
   const scrollTarget = target.closest(".field, .search-field, .activity-player-control") || target;
-  window.setTimeout(() => {
+  scheduleKeyboardFocusScroll(target, () => {
     refreshVisualViewportModalVars();
     const viewport = window.visualViewport;
     const viewportHeight = Math.max(0, Number(viewport?.height || window.innerHeight || document.documentElement?.clientHeight || 0));
@@ -386,7 +401,7 @@ function scrollFocusedPageControlIntoView(control = document.activeElement, dela
     const mainRect = main.getBoundingClientRect?.();
     const targetRect = scrollTarget.getBoundingClientRect?.();
     if (!viewportHeight || !mainRect || !targetRect) {
-      scrollTarget.scrollIntoView?.({ block: "nearest", inline: "nearest", behavior: "smooth" });
+      scrollTarget.scrollIntoView?.({ block: "nearest", inline: "nearest", behavior: "auto" });
       return;
     }
     const safeTop = Math.max(viewportTop + 12, Number(mainRect.top || 0) + 12);
@@ -404,7 +419,7 @@ function scrollFocusedPageControlIntoView(control = document.activeElement, dela
     if (Math.abs(delta) < 1) return;
     const nextTop = Math.max(0, Number(main.scrollTop || 0) + delta);
     if (typeof main.scrollTo === "function") {
-      main.scrollTo({ top: nextTop, behavior: "smooth" });
+      main.scrollTo({ top: nextTop, behavior: "auto" });
     } else {
       main.scrollTop = nextTop;
     }
@@ -417,6 +432,7 @@ function handleKeyboardControlFocusIn(event) {
   const pageTarget = pageTextControl(event.target);
   const target = modalTarget || pageTarget;
   if (!target) return;
+  clearKeyboardFocusScrollTimers();
   updateKeyboardControlFocusState(target);
   const scrollFocusedControl = modalTarget
     ? scrollFocusedModalControlIntoView
@@ -425,10 +441,12 @@ function handleKeyboardControlFocusIn(event) {
 }
 
 function handleKeyboardControlFocusOut() {
+  clearKeyboardFocusScrollTimers();
   window.setTimeout(() => updateKeyboardControlFocusState(document.activeElement), 0);
 }
 
 function handleModalViewportChange() {
+  clearKeyboardFocusScrollTimers();
   refreshVisualViewportModalVars();
   updateKeyboardControlFocusState(document.activeElement);
   if (!scrollFocusedModalControlIntoView(document.activeElement, 40)) {

@@ -1,6 +1,15 @@
 let voteDragState = null;
 let viewNavigationPending = false;
 
+function userFacingSignInError(error) {
+  const message = String(error?.message || "");
+  const safeMessages = new Set([
+    "Email or password is incorrect.",
+    "This account does not have AD Smashers access."
+  ]);
+  return safeMessages.has(message) ? message : SIGN_IN_ERROR_MESSAGE;
+}
+
 function openPaymentTransactionActions(transaction) {
   if (!paymentTransactionCanBeReversed(transaction)) return false;
   const isAdvancePayment = transaction.type === "advance-payment";
@@ -332,11 +341,12 @@ function handleClick(event) {
         cloudLoadFailed = false;
         cloudLoading = false;
         if (cloudStateNeedsMigrationSave) saveState();
-        showToast("Cloud data loaded.");
+        showToast("Your data is ready.");
         render();
       })
       .catch((error) => {
-        cloudError = error.message || "Could not load Firestore data.";
+        console.error("App data retry failed", error);
+        cloudError = DATA_LOAD_ERROR_MESSAGE;
         cloudLoadFailed = true;
         cloudLoading = false;
         render();
@@ -475,7 +485,7 @@ function handleClick(event) {
     return;
   }
   if (action === "open-payment-group-summary") {
-    modal = { type: "paymentGroupSummary", groupId: actionTarget.dataset.paymentGroup, mode: "summary" };
+    modal = { type: "paymentGroupSummary", groupId: actionTarget.dataset.paymentGroup, mode: "reminder" };
     render();
     return;
   }
@@ -545,7 +555,7 @@ function handleClick(event) {
     return;
   }
   if (action === "open-player-payment-summary") {
-    modal = { type: "playerPaymentSummary", playerId: actionTarget.dataset.player, mode: "summary" };
+    modal = { type: "playerPaymentSummary", playerId: actionTarget.dataset.player, mode: "reminder" };
     render();
     return;
   }
@@ -1238,11 +1248,12 @@ async function handleSubmit(event) {
       cloudLoading = false;
       render();
     } catch (error) {
+      console.error("Sign in failed", error);
       authLoading = false;
       cloudLoading = false;
       currentUser = null;
       cloudLoadFailed = false;
-      loginError = error.message || "Could not sign in.";
+      loginError = userFacingSignInError(error);
       render();
     }
     return;

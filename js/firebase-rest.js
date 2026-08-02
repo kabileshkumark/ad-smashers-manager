@@ -340,7 +340,7 @@ async function flushCloudSave() {
   try {
     await saveCloudStateWithJournalRecovery();
   } catch (error) {
-    lastCloudSaveError = error.message || "Could not save to Firestore.";
+    lastCloudSaveError = error.message || "Could not save your changes.";
     if (error.cloudStateConflict) {
       cloudSaveConflict = true;
       cloudError = lastCloudSaveError;
