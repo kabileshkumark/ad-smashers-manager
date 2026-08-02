@@ -1734,7 +1734,7 @@ function buildPlayerLatestAdvanceSummaryCopy(playerId) {
   const playerName = player.name || player.displayName || "Player";
   const cycles = playerAdvanceCycleSummaries(playerId);
   const summary = cycles[cycles.length - 1];
-  if (!summary) return `*Latest Advance - ${playerName}*\nNo active Advance payments.`;
+  if (!summary) return finishPaymentSummaryCopy([`*Latest Advance - ${playerName}*`, "No active Advance payments."]);
   const lines = [
     `*Latest Advance - ${playerName}*`,
     `Date: ${summary.date ? formatDate(summary.date) : "Date not set"}`,
@@ -1743,7 +1743,7 @@ function buildPlayerLatestAdvanceSummaryCopy(playerId) {
     `*Balance: ${currency(summary.balance)}*`
   ];
   appendAdvanceUsageCopy(lines, summary.deductions);
-  return lines.join("\n");
+  return finishPaymentSummaryCopy(lines);
 }
 
 function buildPlayerCompleteAdvanceSummaryCopy(playerId) {
@@ -1760,7 +1760,7 @@ function buildPlayerCompleteAdvanceSummaryCopy(playerId) {
   ];
   if (!cycles.length) {
     lines.push("", "No active Advance payments.");
-    return lines.join("\n");
+    return finishPaymentSummaryCopy(lines);
   }
   lines.push("", "*Advance deposits*");
   [...cycles].reverse().forEach((cycle) => {
@@ -1772,7 +1772,13 @@ function buildPlayerCompleteAdvanceSummaryCopy(playerId) {
       ...(cycle.deductions.length ? cycle.deductions.map(advanceDeductionCopyLine) : ["No usage from this Advance."])
     );
   });
-  return lines.join("\n");
+  return finishPaymentSummaryCopy(lines);
+}
+
+const PAYMENT_SUMMARY_DISCLAIMER = "_Generated via AD Smashers Manager app._";
+
+function finishPaymentSummaryCopy(lines) {
+  return [...lines, "", PAYMENT_SUMMARY_DISCLAIMER].join("\n");
 }
 
 function coverageTotalsForPlayers(playerIds, snapshot = ledgerCoverageSnapshot()) {
@@ -1845,6 +1851,71 @@ function appendPaymentSummaryOverview(lines, coverage, { includeAvailable = fals
   if (includeAvailable && coverage.remainingCredit > 0) lines.push(`Credit available: ${currency(coverage.remainingCredit)}`);
 }
 
+function paymentReceiptTransactions(transactions = []) {
+  return [...transactions]
+    .filter((transaction) => paymentTransactionIsUserReceipt(transaction) && paymentTransactionIsActive(transaction) && Number(transaction.amountPaid || 0) > 0)
+    .sort((a, b) => (
+      String(a.date || "").localeCompare(String(b.date || ""))
+      || String(a.createdAt || "").localeCompare(String(b.createdAt || ""))
+    ));
+}
+
+function paymentTransactionAppliedForPlayer(transaction, playerId) {
+  return ledgerMoney(
+    (transaction?.allocations || [])
+      .filter((allocation) => (
+        allocation.playerId === playerId
+        && (allocation.type === "session" || allocation.type === "activity")
+      ))
+      .reduce((total, allocation) => total + Number(allocation.amount || 0), 0)
+  );
+}
+
+function paymentReceiptDetails(transaction) {
+  const details = [];
+  if (Number(transaction?.appliedAmount || 0) > 0) details.push(`${currency(transaction.appliedAmount)} applied`);
+  if (Number(transaction?.advanceAmount || 0) > 0) details.push(`${currency(transaction.advanceAmount)} Credit created`);
+  return details.length ? ` (${details.join("; ")})` : "";
+}
+
+function playerPaymentReceiptCopyLine(transaction, playerId) {
+  const payerName = getPlayerName(transaction.paidById);
+  const playerName = getPlayerName(playerId);
+  const date = transaction.date ? formatDate(transaction.date) : "Date not set";
+  if (transaction.type === "advance-payment") {
+    return transaction.paidById === playerId
+      ? `- ${date} - ${payerName} paid ${currency(transaction.amountPaid)} as Advance`
+      : "";
+  }
+  if (transaction.type === "group-payment" && transaction.paidById !== playerId) {
+    const playerAmount = paymentTransactionAppliedForPlayer(transaction, playerId);
+    if (playerAmount <= 0) return "";
+    const group = getPaymentGroup(transaction.groupId);
+    return `- ${date} - ${payerName} paid ${currency(playerAmount)} for ${playerName} via ${group?.name || "Payment Group"}`;
+  }
+  if (transaction.paidById !== playerId) return "";
+  const group = transaction.type === "group-payment" ? getPaymentGroup(transaction.groupId) : null;
+  return `- ${date} - ${payerName} paid ${currency(transaction.amountPaid)}${group ? ` to ${group.name || "Payment Group"}` : ""}${paymentReceiptDetails(transaction)}`;
+}
+
+function playerPaymentReceiptCopyLines(playerId) {
+  return paymentReceiptTransactions(playerPaymentTransactions(playerId))
+    .map((transaction) => playerPaymentReceiptCopyLine(transaction, playerId))
+    .filter(Boolean);
+}
+
+function paymentGroupReceiptCopyLines(groupId) {
+  return paymentReceiptTransactions(paymentGroupTransactions(groupId)).map((transaction) => {
+    const date = transaction.date ? formatDate(transaction.date) : "Date not set";
+    return `- ${date} - ${getPlayerName(transaction.paidById)} paid ${currency(transaction.amountPaid)}${paymentReceiptDetails(transaction)}`;
+  });
+}
+
+function appendPaymentsFromStart(lines, paymentLines) {
+  lines.push("", "*Payments from the start*");
+  lines.push(...(paymentLines.length ? paymentLines : ["No recorded payments."]));
+}
+
 function buildPlayerCurrentPaymentCopy(playerId, type = "summary") {
   const player = getPlayer(playerId);
   if (!player) return "Player not found.";
@@ -1854,10 +1925,14 @@ function buildPlayerCurrentPaymentCopy(playerId, type = "summary") {
   const pendingItems = playerPendingPaymentItems(playerId, snapshot);
   const title = type === "reminder" ? "Payment Reminder" : "Payment Summary";
   const lines = [`*${title} - ${playerName}*`];
+  if (type === "summary") {
+    appendPaymentsFromStart(lines, playerPaymentReceiptCopyLines(playerId));
+    lines.push("", "*Current dues*");
+  }
   appendPaymentSummaryOverview(lines, coverage, { includeAvailable: type === "summary" });
   lines.push("", "*Pending items*");
   lines.push(...(pendingItems.length ? pendingItems.map(paymentSummaryPendingLine) : ["No pending items."]));
-  return lines.join("\n");
+  return finishPaymentSummaryCopy(lines);
 }
 
 function paymentGroupSummaryPlayerIds(group) {
@@ -1890,6 +1965,10 @@ function buildPaymentGroupCurrentCopy(groupId = "", type = "summary") {
     `Paid by: ${group.payerId ? getPlayerName(group.payerId) : "Not set"}`,
     `Members: ${paymentGroupMemberNames(group)}`
   ];
+  if (type === "summary") {
+    appendPaymentsFromStart(lines, paymentGroupReceiptCopyLines(groupId));
+    lines.push("", "*Current dues*");
+  }
   appendPaymentSummaryOverview(lines, coverage, { dueLabel: "Total due" });
   lines.push("", "*By member*");
   playerIds.forEach((playerId) => appendPaymentGroupMemberSummary(lines, playerId, snapshot));
@@ -1897,7 +1976,7 @@ function buildPaymentGroupCurrentCopy(groupId = "", type = "summary") {
     lines.push("", `*${guestName} - Clear*`, "No pending items.");
   });
   if (!playerIds.length && !paymentGroupGuestNames(group).length) lines.push("No members selected.");
-  return lines.join("\n");
+  return finishPaymentSummaryCopy(lines);
 }
 
 function buildPlayerPaymentSummaryCopy(playerId) {

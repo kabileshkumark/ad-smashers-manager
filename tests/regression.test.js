@@ -1434,6 +1434,37 @@ test("payment summary previews use current ledger totals and keep history transa
           active: true
         }
       ],
+      paymentTransactions: [
+        {
+          id: "copy-player-payment",
+          createdAt: "2026-06-01T10:00:00.000Z",
+          type: "player-payment",
+          date: "2026-06-01",
+          paidById: "p1",
+          groupId: "",
+          playerIds: ["p1"],
+          amountPaid: 10,
+          appliedAmount: 10,
+          advanceAmount: 0,
+          allocations: [{ type: "session", playerId: "p1", sessionId: "copy-session", amount: 10 }]
+        },
+        {
+          id: "copy-group-payment",
+          createdAt: "2026-06-08T10:00:00.000Z",
+          type: "group-payment",
+          date: "2026-06-08",
+          paidById: "payer",
+          groupId: "copy-group",
+          playerIds: ["payer", "p1"],
+          amountPaid: 15,
+          appliedAmount: 15,
+          advanceAmount: 0,
+          allocations: [
+            { type: "session", playerId: "p1", sessionId: "copy-session-extra", amount: 5 },
+            { type: "activity", playerId: "p1", activityId: "dinner", amount: 10 }
+          ]
+        }
+      ],
       advances: { p1: 5 }
     })
   );
@@ -1448,6 +1479,11 @@ test("payment summary previews use current ledger totals and keep history transa
 
   const text = run(context, 'buildPlayerPaymentSummaryCopy("p1")');
   assert.match(text, /\*Payment Summary - Aishu\*/);
+  assert.match(text, /\*Payments from the start\*/);
+  assert.match(text, /Aishu paid 10 AED \(10 AED applied\)/);
+  assert.match(text, /Kabilesh paid 15 AED for Aishu via Aishu Group/);
+  assert.ok(text.indexOf("Aishu paid 10 AED") < text.indexOf("Kabilesh paid 15 AED"));
+  assert.match(text, /\*Current dues\*/);
   assert.match(text, /Due before adjustments: 40 AED/);
   assert.match(text, /Credit applied: 5 AED/);
   assert.match(text, /\*Amount due: 35 AED\*/);
@@ -1455,24 +1491,29 @@ test("payment summary previews use current ledger totals and keep history transa
   assert.equal((text.match(/session: (?:20|5) AED/g) || []).length, 2);
   assert.doesNotMatch(text, /Advance applied/);
   assert.doesNotMatch(text, /Payment Transactions|Cash recorded|Attendance:/);
+  assert.match(text, /_Generated via AD Smashers Manager app\._$/);
 
   const dueText = run(context, 'buildPlayerPaymentReminderCopy("p1")');
   assert.match(dueText, /\*Payment Reminder - Aishu\*/);
   assert.match(dueText, /Due before adjustments: 40 AED/);
   assert.match(dueText, /\*Amount due: 35 AED\*/);
   assert.match(dueText, /Dinner: 10 AED/);
+  assert.doesNotMatch(dueText, /Payments from the start|Aishu paid 10 AED|Kabilesh paid 15 AED/);
+  assert.match(dueText, /_Generated via AD Smashers Manager app\._$/);
 
   const modalHtml = run(context, 'renderPlayerPaymentSummaryModal("p1")');
   assert.match(modalHtml, /Payment Summary/);
   assert.match(modalHtml, /Shareable preview/);
   assert.match(modalHtml, /Summary/);
   assert.match(modalHtml, /Due Reminder/);
-  assert.match(modalHtml, /Copy Summary/);
+  assert.ok(modalHtml.indexOf('data-summary-mode="reminder"') < modalHtml.indexOf('data-summary-mode="summary"'));
+  assert.match(modalHtml, /summary-mode-option active[^>]*aria-selected="true"[^>]*data-action="set-payment-summary-mode"[^>]*data-summary-mode="reminder"/);
+  assert.match(modalHtml, /Copy Reminder/);
   assert.match(modalHtml, /copy-player-payment-summary/);
   assert.doesNotMatch(modalHtml, /Copy Full History|Copy Due History/);
-  const reminderModalHtml = run(context, 'renderPlayerPaymentSummaryModal("p1", "reminder")');
-  assert.match(reminderModalHtml, /Copy Reminder/);
-  assert.match(reminderModalHtml, /data-summary-mode="reminder"/);
+  const summaryModalHtml = run(context, 'renderPlayerPaymentSummaryModal("p1", "summary")');
+  assert.match(summaryModalHtml, /Copy Summary/);
+  assert.match(summaryModalHtml, /Payments from the start/);
 
   const groupCardHtml = run(context, 'renderPaymentGroupCard(getPaymentGroup("copy-group"))');
   assert.match(groupCardHtml, /open-payment-group-summary/);
@@ -1486,27 +1527,34 @@ test("payment summary previews use current ledger totals and keep history transa
   const groupModalHtml = run(context, 'renderPaymentGroupSummaryModal("copy-group")');
   assert.match(groupModalHtml, /Payment Group Summary/);
   assert.match(groupModalHtml, /Shareable preview/);
-  assert.match(groupModalHtml, /Copy Summary/);
+  assert.ok(groupModalHtml.indexOf('data-summary-mode="reminder"') < groupModalHtml.indexOf('data-summary-mode="summary"'));
+  assert.match(groupModalHtml, /Copy Reminder/);
   assert.match(groupModalHtml, /copy-payment-group-summary/);
 
   const groupText = run(context, 'buildPaymentGroupSummaryCopy("copy-group")');
   assert.match(groupText, /\*Payment Summary - Aishu Group\*/);
   assert.match(groupText, /Paid by: Kabilesh/);
   assert.match(groupText, /Members: Kabilesh, Aishu/);
+  assert.match(groupText, /\*Payments from the start\*[\s\S]*Kabilesh paid 15 AED \(15 AED applied\)/);
+  assert.match(groupText, /\*Current dues\*/);
   assert.match(groupText, /\*Total due: 35 AED\*/);
   assert.match(groupText, /\*By member\*[\s\S]*\*Kabilesh - Clear\*[\s\S]*No pending items/);
   assert.match(groupText, /\*Aishu - 35 AED due\*[\s\S]*Dinner: 10 AED/);
+  assert.match(groupText, /_Generated via AD Smashers Manager app\._$/);
   assert.equal(run(context, 'paymentGroupSummaryPlayerIds(getPaymentGroup("copy-group")).reduce((total, id) => total + paymentSummaryCoverage([id]).balance, 0)'), 35);
 
   const groupReminder = run(context, 'buildPaymentGroupReminderCopy("copy-group")');
   assert.match(groupReminder, /\*Payment Reminder - Aishu Group\*/);
   assert.match(groupReminder, /\*Aishu - 35 AED due\*/);
+  assert.doesNotMatch(groupReminder, /Payments from the start|Kabilesh paid 15 AED/);
+  assert.match(groupReminder, /_Generated via AD Smashers Manager app\._$/);
 
   const playerHistoryHtml = run(context, 'renderPaymentHistoryModal("p1")');
-  assert.match(playerHistoryHtml, /No recorded payment transactions yet/);
+  assert.match(playerHistoryHtml, /Player Payment/);
+  assert.match(playerHistoryHtml, /Aishu Group/);
   assert.doesNotMatch(playerHistoryHtml, /Current Records|Dinner|Pending items/);
   const groupHistoryHtml = run(context, 'renderGroupPaymentHistoryModal("copy-group")');
-  assert.match(groupHistoryHtml, /No recorded group payment transactions yet/);
+  assert.match(groupHistoryHtml, /Aishu Group/);
   assert.doesNotMatch(groupHistoryHtml, /Current Allocation|Credit applied|Pending items/);
 });
 
@@ -2468,6 +2516,60 @@ test("attendance-only guests for poll voters do not update voter guest count", (
   ]);
   assert.equal(run(context, "state.sessions[0].payments.p1.guestCount"), 1);
   assert.equal(run(context, "state.sessions[0].payments.p1.amount"), 40);
+});
+
+test("confirmed poll guests show newly added attendance guests immediately", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("saravanan", "Saravanan", "Intermediate")],
+      sessions: [
+        baseSession({
+          id: "session-saravanan-guests",
+          expectedPlayers: 2,
+          attendanceManual: true,
+          attendedPlayerIds: ["saravanan"],
+          responses: [
+            {
+              id: "response-saravanan",
+              playerId: "saravanan",
+              voteOrder: 1,
+              attendanceChoice: "in_plus_1",
+              guestCount: 1,
+              racketNeeded: false,
+              rawOptions: ["I'm in +1"]
+            }
+          ]
+        })
+      ]
+    })
+  );
+
+  assert.deepEqual(jsonValue(context, "effectiveAttendedEntries(state.sessions[0]).map((entry) => entry.name)"), [
+    "Saravanan",
+    "Saravanan Guest 1"
+  ]);
+
+  assert.equal(run(context, 'addManualAttendanceGuest(state.sessions[0], "saravanan")'), true);
+  assert.equal(run(context, 'addManualAttendanceGuest(state.sessions[0], "saravanan")'), true);
+
+  assert.equal(run(context, "state.sessions[0].responses[0].guestCount"), 1);
+  assert.equal(run(context, "state.sessions[0].manualGuestCounts.saravanan"), 2);
+  assert.deepEqual(jsonValue(context, "effectiveAttendedEntries(state.sessions[0]).map((entry) => entry.name)"), [
+    "Saravanan",
+    "Saravanan Guest 1",
+    "Saravanan Guest 2",
+    "Saravanan Guest 3"
+  ]);
+  assert.equal(run(context, "state.sessions[0].payments.saravanan.guestCount"), 3);
+  assert.equal(run(context, "state.sessions[0].payments.saravanan.amount"), 80);
+
+  const html = run(context, 'renderSessionAttendanceModal("session-saravanan-guests")');
+  assert.match(html, />1\. Saravanan</);
+  assert.match(html, /value="Saravanan Guest 1"/);
+  assert.match(html, /value="Saravanan Guest 2"/);
+  assert.match(html, /value="Saravanan Guest 3"/);
 });
 
 test("manual attendance does not pull waiting-list guests into payments", () => {
@@ -3811,11 +3913,13 @@ test("payments page records player advances and copies deduction summary", () =>
   assert.match(latestCopy, /Deducted: 20 AED/);
   assert.match(latestCopy, /\*Balance: 180 AED\*/);
   assert.match(latestCopy, /\*Usage\*[\s\S]*session: 20 AED/);
+  assert.match(latestCopy, /_Generated via AD Smashers Manager app\._$/);
 
   const completeCopy = run(context, 'buildPlayerCompleteAdvanceSummaryCopy("payer")');
   assert.match(completeCopy, /\*Complete Advance Summary - Advance Payer\*/);
   assert.match(completeCopy, /Total received: 200 AED/);
   assert.match(completeCopy, /Total deducted: 20 AED/);
+  assert.match(completeCopy, /_Generated via AD Smashers Manager app\._$/);
 
   const detailsHtml = run(context, 'renderAdvanceDetailsModal("payer")');
   assert.match(detailsHtml, /Advance Summary/);
@@ -5455,53 +5559,109 @@ test("fresh app startup defaults to Sessions instead of the last saved page", ()
   assert.equal(view, "sessions");
 });
 
-test("failed cloud load blocks the empty app shell", () => {
+test("startup and recovery screens hide backend provider details", () => {
   const context = createAppContext();
+
   run(
     context,
     `
-      state = emptyState();
-      cloudLoadFailed = true;
-      cloudError = "Network request failed.";
+      cloudLoading = true;
       render();
     `
   );
 
-  const html = run(context, 'document.querySelector("#app").innerHTML');
-  assert.match(html, /Cloud Data Did Not Load/);
+  let html = run(context, 'document.querySelector("#app").innerHTML');
+  assert.match(html, /Loading your data/);
+  assert.doesNotMatch(html, /Firebase|Firestore/i);
+
+  run(
+    context,
+    `
+      state = emptyState();
+      cloudLoading = false;
+      cloudLoadFailed = true;
+      cloudError = "Firestore request to Firebase failed.";
+      render();
+    `
+  );
+
+  html = run(context, 'document.querySelector("#app").innerHTML');
+  assert.match(html, /Your Data Did Not Load/);
   assert.match(html, /Your data is not deleted/);
-  assert.match(html, /Network request failed\./);
+  assert.match(html, /Could not load your data\. Check your connection and try again\./);
+  assert.doesNotMatch(html, /Firestore request to Firebase failed|Firebase|Firestore/i);
   assert.match(html, /data-action="retry-cloud-load"/);
+  assert.match(html, /Retry Data Load/);
   assert.match(html, /data-action="check-app-update"/);
   assert.match(html, /data-action="sign-out"/);
   assert.doesNotMatch(html, /Manage poll, booking, allocation, payments, and messages/);
+
+  const settingsHtml = run(context, "renderSettings()");
+  assert.doesNotMatch(settingsHtml, /Firebase|Firestore/i);
 });
 
-test("loading screen renders animated badminton rally instead of shot labels", () => {
+test("unknown sign-in failures use a safe public message", () => {
+  const context = createAppContext();
+
+  assert.equal(
+    run(context, 'userFacingSignInError({ message: "Firebase API quota details" })'),
+    "Could not sign in. Check your connection and try again."
+  );
+  assert.equal(
+    run(context, 'userFacingSignInError({ message: "Email or password is incorrect." })'),
+    "Email or password is incorrect."
+  );
+  assert.equal(
+    run(context, 'userFacingSignInError({ message: "This account does not have AD Smashers access." })'),
+    "This account does not have AD Smashers access."
+  );
+});
+
+test("loading screen stages a two-player rally with one shuttle and timed VFX", () => {
+  const context = createAppContext();
   const shell = fs.readFileSync(path.join(ROOT, "js/render-shell.js"), "utf8");
   const css = fs.readFileSync(path.join(ROOT, "styles.css"), "utf8");
+  const html = run(context, 'renderLoading("Loading your data...")');
 
-  ["smash", "drop", "drive", "clear", "net"].forEach((shot) => {
-    assert.match(shell, new RegExp(`"${shot}"`));
-    assert.match(css, new RegExp(`loading-shuttle-${shot}`));
-    assert.match(css, new RegExp(`loading-shot-path-${shot}`));
-  });
-  assert.match(shell, /function loadingShotSequence/);
-  assert.match(shell, /Math\.random/);
-  assert.match(shell, /--shot-delay/);
-  assert.match(css, /animation-delay:\s*var\(--shot-delay/);
-  assert.doesNotMatch(shell, /loading-callouts/);
-  assert.doesNotMatch(shell, />Smash<|>Drop</);
-  assert.match(css, /\.loading-court-scene\s*{[\s\S]*scale\(1\.08\)/);
-  assert.match(css, /\.loading-shuttle\s*{[\s\S]*width:\s*clamp\(78px, 7vw, 132px\)/);
+  assert.equal((html.match(/class="loading-flight-shuttle"/g) || []).length, 1);
+  assert.equal((html.match(/class="loading-player-figure loading-player-/g) || []).length, 2);
+  assert.match(html, /loading-player-left/);
+  assert.match(html, /loading-player-right/);
+  assert.match(html, /loading-swing-arm/);
+  assert.match(html, /loading-rally-trail-forward/);
+  assert.match(html, /loading-rally-trail-return/);
+  assert.match(html, /loading-contact-left/);
+  assert.match(html, /loading-contact-right/);
+  assert.match(html, /loading-court-surface/);
+  assert.match(html, /loading-court-boundary/);
+  assert.match(html, /loading-vfx-wide/);
+  assert.match(html, /loading-vfx-compact/);
+  assert.match(html, /loading-player-free-arm/);
+  assert.match(html, /loading-player-leg-front/);
+  assert.match(html, /loading-player-leg-back/);
+  assert.match(html, /loading-court-light/);
+  assert.match(html, /loading-progress/);
+  assert.doesNotMatch(html, /loading-racket-(?:left|right)|loading-shot-path|loading-shuttle-(?:smash|drop|drive|clear|net)/);
+  assert.doesNotMatch(shell, /loadingShotSequence|Math\.random|--shot-delay/);
+  assert.match(css, /\.loading-court-scene\s*{[\s\S]*inset:\s*0;/);
+  assert.doesNotMatch(css, /\.loading-court-scene\s*{[^}]*rotateX/);
+  assert.match(css, /\.loading-player-left\s*{[^}]*left:\s*10%;/);
+  assert.match(css, /\.loading-player-right\s*{[^}]*top:\s*12%;[^}]*right:\s*22%;/);
+  assert.match(css, /\.loading-swing-arm\s*{[^}]*transform-origin:\s*141px 108px;/);
+  assert.match(css, /\.loading-flight-shuttle\s*{[\s\S]*animation:\s*loadingSingleRallyFlight/);
   assert.match(css, /\.loading-card\s*{[^}]*position:\s*relative;/);
   assert.doesNotMatch(css, /\.loading-card\s*{[^}]*bottom:/);
   assert.match(css, /\.loading-card\s*{[\s\S]*width:\s*min\(calc\(100% - 32px\), 420px\)/);
-  assert.match(css, /@keyframes loadingSmashFlight/);
-  assert.match(css, /@keyframes loadingDriveFlight/);
-  assert.match(css, /@keyframes loadingDropFlight/);
-  assert.match(css, /@keyframes loadingClearFlight/);
-  assert.match(css, /@keyframes loadingNetTumble/);
+  assert.match(css, /@keyframes loadingSingleRallyFlight/);
+  assert.match(css, /@keyframes loadingLeftSwing/);
+  assert.match(css, /@keyframes loadingRightSwing/);
+  assert.match(css, /@keyframes loadingContactLeft/);
+  assert.match(css, /@keyframes loadingContactRight/);
+  assert.match(css, /@keyframes loadingTrailForward/);
+  assert.match(css, /@keyframes loadingTrailReturn/);
+  assert.match(css, /@keyframes loadingCourtReveal/);
+  assert.match(css, /@keyframes loadingProgressSweep/);
+  assert.doesNotMatch(css, /@keyframes loadingRacket|@keyframes loading(?:Smash|Drive|Drop|Clear|Net)/);
 });
 
 test("dashboard logo navigation paints a loading overlay before rendering", () => {
@@ -5728,12 +5888,13 @@ test("modal and page fields stay visible above mobile keyboards", async () => {
     }
   };
 
+  context.document.activeElement = context.__modalInput;
   assert.equal(run(context, "scrollFocusedModalControlIntoView(__modalInput, 0)"), true);
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(context.__modalScrollOptions.length, 1);
   assert.equal(context.__modalScrollOptions[0].block, "center");
   assert.equal(context.__modalScrollOptions[0].inline, "nearest");
-  assert.equal(context.__modalScrollOptions[0].behavior, "smooth");
+  assert.equal(context.__modalScrollOptions[0].behavior, "auto");
 
   const pageSelector = run(context, "PAGE_TEXT_CONTROL_SELECTOR");
   assert.match(pageSelector, /#main-content input/);
@@ -5765,11 +5926,64 @@ test("modal and page fields stay visible above mobile keyboards", async () => {
     }
   };
 
+  context.document.activeElement = context.__pageInput;
   assert.equal(run(context, "scrollFocusedPageControlIntoView(__pageInput, 0)"), true);
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(context.__pageScrollOptions.length, 1);
   assert.equal(context.__pageScrollOptions[0].top, 700);
-  assert.equal(context.__pageScrollOptions[0].behavior, "smooth");
+  assert.equal(context.__pageScrollOptions[0].behavior, "auto");
+});
+
+test("activity field focus cancels stale mobile keyboard scrolling", async () => {
+  const context = createAppContext();
+  const modalSelector = run(context, "MODAL_TEXT_CONTROL_SELECTOR");
+  context.__activityFocusScrolls = [];
+  context.__activityModalCard = {};
+  context.__firstActivityField = {
+    scrollIntoView(options) {
+      context.__activityFocusScrolls.push({ field: "first", options });
+    }
+  };
+  context.__secondActivityField = {
+    scrollIntoView(options) {
+      context.__activityFocusScrolls.push({ field: "second", options });
+    }
+  };
+  context.__firstActivityInput = {
+    matches(selector) {
+      return selector === modalSelector;
+    },
+    closest(selector) {
+      if (selector === ".modal-card") return context.__activityModalCard;
+      if (selector.includes(".field")) return context.__firstActivityField;
+      return null;
+    }
+  };
+  context.__secondActivityInput = {
+    matches(selector) {
+      return selector === modalSelector;
+    },
+    closest(selector) {
+      if (selector === ".modal-card") return context.__activityModalCard;
+      if (selector.includes(".field")) return context.__secondActivityField;
+      return null;
+    }
+  };
+
+  run(
+    context,
+    `
+      document.activeElement = __firstActivityInput;
+      handleKeyboardControlFocusIn({ target: __firstActivityInput });
+      document.activeElement = __secondActivityInput;
+      handleKeyboardControlFocusIn({ target: __secondActivityInput });
+    `
+  );
+  await new Promise((resolve) => setTimeout(resolve, 560));
+
+  assert.equal(context.__activityFocusScrolls.filter((entry) => entry.field === "first").length, 0);
+  assert.equal(context.__activityFocusScrolls.filter((entry) => entry.field === "second").length, 3);
+  assert.ok(context.__activityFocusScrolls.every((entry) => entry.options.behavior === "auto"));
 });
 
 test("app shell version is consistent with the configured technical build", () => {

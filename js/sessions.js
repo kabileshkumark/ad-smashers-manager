@@ -120,9 +120,10 @@ function effectiveAttendedEntries(session, playersList = state.players) {
     const output = [entry];
     if (!entry.guest) displayedPlayerIds.add(entry.playerId);
     const hasLaterEntryForPlayer = entries.slice(index + 1).some((item) => item.playerId === entry.playerId);
-    if (!entry.guest && !hasLaterEntryForPlayer && !manualGuestPlayerIds.has(entry.playerId)) {
+    if (!hasLaterEntryForPlayer && !manualGuestPlayerIds.has(entry.playerId)) {
       manualGuestPlayerIds.add(entry.playerId);
-      output.push(...manualAttendanceGuestEntries(session, entry.playerId, playersList, index, removedGuestKeys));
+      const responseGuestCount = entries.filter((item) => item.playerId === entry.playerId && item.guest).length;
+      output.push(...manualAttendanceGuestEntries(session, entry.playerId, playersList, index, removedGuestKeys, responseGuestCount));
     }
     return output;
   });
@@ -156,7 +157,7 @@ function manualAttendanceEntries(session, playerId, playersList = state.players,
   return [playerEntry, ...manualAttendanceGuestEntries(session, playerId, playersList, index, removedGuestKeys)];
 }
 
-function manualAttendanceGuestEntries(session, playerId, playersList = state.players, index = 0, removedGuestKeys = new Set()) {
+function manualAttendanceGuestEntries(session, playerId, playersList = state.players, index = 0, removedGuestKeys = new Set(), guestNumberOffset = 0) {
   const playerEntry = manualAttendanceEntry(session, playerId, playersList, index);
   if (!playerEntry) return [];
   const entries = [];
@@ -167,7 +168,7 @@ function manualAttendanceGuestEntries(session, playerId, playersList = state.pla
       key,
       responseId: "",
       playerId,
-      name: sessionGuestName(session, key, `${playerEntry.name} Guest ${guestIndex}`),
+      name: sessionGuestName(session, key, `${playerEntry.name} Guest ${guestNumberOffset + guestIndex}`),
       skillLevel: "Guest",
       skillRank: SKILL_RANK.Guest,
       voteOrder: playerEntry.voteOrder,

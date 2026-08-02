@@ -24,7 +24,7 @@ function renderSettings() {
         <div class="section-heading">
           <div>
             <h2>App Data Backup</h2>
-            <p>Export or restore the Firestore app data using a JSON backup.</p>
+            <p>Export or restore the app data using a JSON backup.</p>
           </div>
         </div>
         <div class="toolbar">
@@ -182,8 +182,8 @@ function renderModal() {
   if (modalType === "shuttleSpentHistory") return renderShuttleSpentHistoryModal();
   if (modalType === "advanceDetails") return renderAdvanceDetailsModal(modalPayload.playerId || modalId, modalPayload.mode || "latest");
   if (modalType === "advanceHistory") return renderAdvanceHistoryModal(modalPayload.playerId || modalId);
-  if (modalType === "playerPaymentSummary") return renderPlayerPaymentSummaryModal(modalPayload.playerId || modalId, modalPayload.mode || "summary");
-  if (modalType === "paymentGroupSummary") return renderPaymentGroupSummaryModal(modalPayload.groupId || modalId, modalPayload.mode || "summary");
+  if (modalType === "playerPaymentSummary") return renderPlayerPaymentSummaryModal(modalPayload.playerId || modalId, modalPayload.mode || "reminder");
+  if (modalType === "paymentGroupSummary") return renderPaymentGroupSummaryModal(modalPayload.groupId || modalId, modalPayload.mode || "reminder");
   if (modalType === "partialPayment") return renderPartialPaymentModal(modalPayload.sessionId || modalId, modalPayload.playerId);
   if (modalType === "confirmDelete") return renderDeleteConfirmModal(modalPayload);
   if (modalType === "court") return renderCourtModal(modalId);
@@ -348,7 +348,7 @@ function renderPaymentSummaryPreview(summaryText, label) {
   `;
 }
 
-function renderPlayerPaymentSummaryModal(playerId = "", mode = "summary") {
+function renderPlayerPaymentSummaryModal(playerId = "", mode = "reminder") {
   const player = getPlayer(playerId);
   const playerName = player?.name || player?.displayName || "Player";
   const activeMode = mode === "reminder" ? "reminder" : "summary";
@@ -367,8 +367,8 @@ function renderPlayerPaymentSummaryModal(playerId = "", mode = "summary") {
           <button class="btn icon-button" type="button" data-action="close-modal" aria-label="Close">X</button>
         </div>
         ${renderPaymentSummaryModeControl([
-          { value: "summary", label: "Summary" },
-          { value: "reminder", label: "Due Reminder" }
+          { value: "reminder", label: "Due Reminder" },
+          { value: "summary", label: "Summary" }
         ], activeMode)}
         ${renderPaymentSummaryPreview(summaryText, `${playerName} ${activeMode}`)}
         <div class="toolbar nowrap confirm-actions payment-summary-copy-actions">
@@ -379,7 +379,7 @@ function renderPlayerPaymentSummaryModal(playerId = "", mode = "summary") {
   `;
 }
 
-function renderPaymentGroupSummaryModal(groupId = "", mode = "summary") {
+function renderPaymentGroupSummaryModal(groupId = "", mode = "reminder") {
   const group = getPaymentGroup(groupId);
   const activeMode = mode === "reminder" ? "reminder" : "summary";
   const summaryText = activeMode === "reminder"
@@ -397,8 +397,8 @@ function renderPaymentGroupSummaryModal(groupId = "", mode = "summary") {
           <button class="btn icon-button" type="button" data-action="close-modal" aria-label="Close">X</button>
         </div>
         ${renderPaymentSummaryModeControl([
-          { value: "summary", label: "Summary" },
-          { value: "reminder", label: "Due Reminder" }
+          { value: "reminder", label: "Due Reminder" },
+          { value: "summary", label: "Summary" }
         ], activeMode)}
         ${renderPaymentSummaryPreview(summaryText, `${group?.name || "Payment group"} ${activeMode}`)}
         <div class="toolbar nowrap confirm-actions payment-summary-copy-actions">
