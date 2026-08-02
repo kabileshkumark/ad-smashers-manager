@@ -1,6 +1,7 @@
 const WHATSAPP_BUSINESS_ANDROID_PACKAGE = "com.whatsapp.w4b";
 const DEFAULT_APP_LOADING_MESSAGE = "Refreshing app...";
 const MODAL_TEXT_CONTROL_SELECTOR = ".modal-card input:not([type='hidden']), .modal-card select, .modal-card textarea";
+const PAGE_TEXT_CONTROL_SELECTOR = "#main-content input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='button']):not([type='submit']), #main-content select, #main-content textarea";
 let appHandoffOverlayTimer = null;
 let modalKeyboardFocusGuardsInstalled = false;
 
@@ -351,6 +352,15 @@ function modalTextControl(target) {
   return target?.matches?.(MODAL_TEXT_CONTROL_SELECTOR) ? target : null;
 }
 
+function pageTextControl(target) {
+  return target?.matches?.(PAGE_TEXT_CONTROL_SELECTOR) ? target : null;
+}
+
+function updateKeyboardControlFocusState(control = document.activeElement) {
+  const isFocused = Boolean(modalTextControl(control) || pageTextControl(control));
+  document.body?.classList?.toggle("is-keyboard-control-focused", isFocused);
+}
+
 function scrollFocusedModalControlIntoView(control = document.activeElement, delay = 80) {
   const target = modalTextControl(control);
   const modalCard = target?.closest?.(".modal-card");
@@ -363,22 +373,75 @@ function scrollFocusedModalControlIntoView(control = document.activeElement, del
   return true;
 }
 
-function handleModalControlFocusIn(event) {
-  const target = modalTextControl(event.target);
+function scrollFocusedPageControlIntoView(control = document.activeElement, delay = 80) {
+  const target = pageTextControl(control);
+  const main = target?.closest?.("#main-content");
+  if (!target || !main) return false;
+  const scrollTarget = target.closest(".field, .search-field, .activity-player-control") || target;
+  window.setTimeout(() => {
+    refreshVisualViewportModalVars();
+    const viewport = window.visualViewport;
+    const viewportHeight = Math.max(0, Number(viewport?.height || window.innerHeight || document.documentElement?.clientHeight || 0));
+    const viewportTop = Math.max(0, Number(viewport?.offsetTop || 0));
+    const mainRect = main.getBoundingClientRect?.();
+    const targetRect = scrollTarget.getBoundingClientRect?.();
+    if (!viewportHeight || !mainRect || !targetRect) {
+      scrollTarget.scrollIntoView?.({ block: "nearest", inline: "nearest", behavior: "smooth" });
+      return;
+    }
+    const safeTop = Math.max(viewportTop + 12, Number(mainRect.top || 0) + 12);
+    const safeBottom = Math.min(
+      viewportTop + viewportHeight - 16,
+      Number(mainRect.bottom || (viewportTop + viewportHeight)) - 16
+    );
+    if (safeBottom <= safeTop) return;
+    let delta = 0;
+    if (Number(targetRect.bottom || 0) > safeBottom) {
+      delta = Number(targetRect.bottom || 0) - safeBottom;
+    } else if (Number(targetRect.top || 0) < safeTop) {
+      delta = Number(targetRect.top || 0) - safeTop;
+    }
+    if (Math.abs(delta) < 1) return;
+    const nextTop = Math.max(0, Number(main.scrollTop || 0) + delta);
+    if (typeof main.scrollTo === "function") {
+      main.scrollTo({ top: nextTop, behavior: "smooth" });
+    } else {
+      main.scrollTop = nextTop;
+    }
+  }, delay);
+  return true;
+}
+
+function handleKeyboardControlFocusIn(event) {
+  const modalTarget = modalTextControl(event.target);
+  const pageTarget = pageTextControl(event.target);
+  const target = modalTarget || pageTarget;
   if (!target) return;
-  [60, 260, 520].forEach((delay) => scrollFocusedModalControlIntoView(target, delay));
+  updateKeyboardControlFocusState(target);
+  const scrollFocusedControl = modalTarget
+    ? scrollFocusedModalControlIntoView
+    : scrollFocusedPageControlIntoView;
+  [60, 260, 520].forEach((delay) => scrollFocusedControl(target, delay));
+}
+
+function handleKeyboardControlFocusOut() {
+  window.setTimeout(() => updateKeyboardControlFocusState(document.activeElement), 0);
 }
 
 function handleModalViewportChange() {
   refreshVisualViewportModalVars();
-  scrollFocusedModalControlIntoView(document.activeElement, 40);
+  updateKeyboardControlFocusState(document.activeElement);
+  if (!scrollFocusedModalControlIntoView(document.activeElement, 40)) {
+    scrollFocusedPageControlIntoView(document.activeElement, 40);
+  }
 }
 
 function installModalKeyboardFocusGuards() {
   if (modalKeyboardFocusGuardsInstalled) return;
   modalKeyboardFocusGuardsInstalled = true;
   refreshVisualViewportModalVars();
-  document.addEventListener("focusin", handleModalControlFocusIn, true);
+  document.addEventListener("focusin", handleKeyboardControlFocusIn, true);
+  document.addEventListener("focusout", handleKeyboardControlFocusOut, true);
   window.addEventListener("resize", handleModalViewportChange, { passive: true });
   if (window.visualViewport) {
     window.visualViewport.addEventListener("resize", handleModalViewportChange, { passive: true });

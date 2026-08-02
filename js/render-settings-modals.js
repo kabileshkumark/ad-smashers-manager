@@ -180,10 +180,10 @@ function renderModal() {
   if (modalType === "paymentHistory") return renderPaymentHistoryModal(modalPayload.playerId || modalId);
   if (modalType === "groupPaymentHistory") return renderGroupPaymentHistoryModal(modalPayload.groupId || modalId);
   if (modalType === "shuttleSpentHistory") return renderShuttleSpentHistoryModal();
-  if (modalType === "advanceDetails") return renderAdvanceDetailsModal(modalPayload.playerId || modalId);
+  if (modalType === "advanceDetails") return renderAdvanceDetailsModal(modalPayload.playerId || modalId, modalPayload.mode || "latest");
   if (modalType === "advanceHistory") return renderAdvanceHistoryModal(modalPayload.playerId || modalId);
-  if (modalType === "playerPaymentDetails" || modalType === "playerPaymentCopy") return renderPlayerPaymentDetailsModal(modalPayload.playerId || modalId);
-  if (modalType === "paymentGroupCopy") return renderPaymentGroupCopyModal(modalPayload.groupId || modalId);
+  if (modalType === "playerPaymentSummary") return renderPlayerPaymentSummaryModal(modalPayload.playerId || modalId, modalPayload.mode || "summary");
+  if (modalType === "paymentGroupSummary") return renderPaymentGroupSummaryModal(modalPayload.groupId || modalId, modalPayload.mode || "summary");
   if (modalType === "partialPayment") return renderPartialPaymentModal(modalPayload.sessionId || modalId, modalPayload.playerId);
   if (modalType === "confirmDelete") return renderDeleteConfirmModal(modalPayload);
   if (modalType === "court") return renderCourtModal(modalId);
@@ -256,7 +256,6 @@ function renderPlayerRoleModal(role = "organizer") {
 function renderPaymentHistoryModal(playerId = "") {
   const player = getPlayer(playerId);
   const playerName = player?.name || player?.displayName || "Player";
-  const items = playerPaymentCorrectionItems(playerId);
   const transactions = playerPaymentTransactions(playerId);
   return `
     <div class="modal-backdrop" data-modal-backdrop>
@@ -269,12 +268,7 @@ function renderPaymentHistoryModal(playerId = "") {
           <button class="btn icon-button" type="button" data-action="close-modal" aria-label="Close">X</button>
         </div>
         <div class="payment-history-list">
-          ${transactions.length ? `<h3 class="mini-title">Transactions</h3>${transactions.map((transaction) => renderPlayerPaymentTransactionItem(playerId, transaction)).join("")}` : ""}
-          ${
-            items.length
-              ? `${transactions.length ? `<h3 class="mini-title">Current Records</h3>` : ""}${items.map((item) => renderPaymentHistoryItem(playerId, item)).join("")}`
-              : transactions.length ? "" : `<div class="empty">No recorded payments yet.</div>`
-          }
+          ${transactions.length ? transactions.map((transaction) => renderPlayerPaymentTransactionItem(playerId, transaction)).join("") : `<div class="empty">No recorded payment transactions yet.</div>`}
         </div>
       </div>
     </div>
@@ -330,71 +324,88 @@ function renderPlayerPaymentTransactionItem(playerId, transaction) {
   `;
 }
 
-function renderPlayerPaymentDetailsModal(playerId = "") {
+function renderPaymentSummaryModeControl(options, activeMode) {
+  return `
+    <div class="summary-mode-control" role="tablist" aria-label="Summary type">
+      ${options.map((option) => `
+        <button class="summary-mode-option ${option.value === activeMode ? "active" : ""}" type="button" role="tab" aria-selected="${option.value === activeMode ? "true" : "false"}" data-action="set-payment-summary-mode" data-summary-mode="${escapeAttr(option.value)}">
+          ${escapeHtml(option.label)}
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderPaymentSummaryPreview(summaryText, label) {
+  return `
+    <section class="payment-summary-preview-shell" aria-label="${escapeAttr(label)} preview">
+      <div class="payment-summary-preview-heading">
+        <span>Shareable preview</span>
+        <span class="badge teal">Live totals</span>
+      </div>
+      <pre class="payment-summary-preview">${escapeHtml(summaryText)}</pre>
+    </section>
+  `;
+}
+
+function renderPlayerPaymentSummaryModal(playerId = "", mode = "summary") {
   const player = getPlayer(playerId);
   const playerName = player?.name || player?.displayName || "Player";
+  const activeMode = mode === "reminder" ? "reminder" : "summary";
+  const summaryText = activeMode === "reminder"
+    ? buildPlayerPaymentReminderCopy(playerId)
+    : buildPlayerPaymentSummaryCopy(playerId);
+  const copyLabel = activeMode === "reminder" ? "Copy Reminder" : "Copy Summary";
   return `
     <div class="modal-backdrop" data-modal-backdrop>
-      <div class="modal-card confirm-modal" role="dialog" aria-modal="true" aria-labelledby="player-payment-details-title">
+      <div class="modal-card payment-summary-modal" role="dialog" aria-modal="true" aria-labelledby="player-payment-details-title">
         <div class="section-heading">
           <div>
-            <h2 class="modal-title" id="player-payment-details-title">Payment Details</h2>
+            <h2 class="modal-title" id="player-payment-details-title">Payment Summary</h2>
             <p>${escapeHtml(playerName)}</p>
           </div>
           <button class="btn icon-button" type="button" data-action="close-modal" aria-label="Close">X</button>
         </div>
-        <div class="toolbar">
-          <button class="btn primary" type="button" data-action="copy-player-payment-history" data-player="${escapeAttr(playerId)}">Copy Full History</button>
-          <button class="btn" type="button" data-action="copy-player-due-history" data-player="${escapeAttr(playerId)}">Copy Due History</button>
+        ${renderPaymentSummaryModeControl([
+          { value: "summary", label: "Summary" },
+          { value: "reminder", label: "Due Reminder" }
+        ], activeMode)}
+        ${renderPaymentSummaryPreview(summaryText, `${playerName} ${activeMode}`)}
+        <div class="toolbar nowrap confirm-actions payment-summary-copy-actions">
+          <button class="btn primary" type="button" data-action="copy-player-payment-summary" data-player="${escapeAttr(playerId)}" data-summary-mode="${escapeAttr(activeMode)}">${copyLabel}</button>
         </div>
       </div>
     </div>
   `;
 }
 
-const renderPlayerPaymentCopyModal = renderPlayerPaymentDetailsModal;
-
-function renderPaymentGroupCopyModal(groupId = "") {
+function renderPaymentGroupSummaryModal(groupId = "", mode = "summary") {
   const group = getPaymentGroup(groupId);
+  const activeMode = mode === "reminder" ? "reminder" : "summary";
+  const summaryText = activeMode === "reminder"
+    ? buildPaymentGroupReminderCopy(groupId)
+    : buildPaymentGroupSummaryCopy(groupId);
+  const copyLabel = activeMode === "reminder" ? "Copy Reminder" : "Copy Summary";
   return `
     <div class="modal-backdrop" data-modal-backdrop>
-      <div class="modal-card confirm-modal" role="dialog" aria-modal="true" aria-labelledby="payment-group-copy-title">
+      <div class="modal-card payment-summary-modal" role="dialog" aria-modal="true" aria-labelledby="payment-group-copy-title">
         <div class="section-heading">
           <div>
-            <h2 class="modal-title" id="payment-group-copy-title">Copy Payment</h2>
+            <h2 class="modal-title" id="payment-group-copy-title">Payment Group Summary</h2>
             <p>${escapeHtml(group?.name || "Payment group")}</p>
           </div>
           <button class="btn icon-button" type="button" data-action="close-modal" aria-label="Close">X</button>
         </div>
-        <div class="toolbar">
-          <button class="btn primary" type="button" data-action="copy-payment-group-history" data-payment-group="${escapeAttr(groupId)}">Copy Full History</button>
-          <button class="btn" type="button" data-action="copy-payment-group-due-history" data-payment-group="${escapeAttr(groupId)}">Copy Due History</button>
+        ${renderPaymentSummaryModeControl([
+          { value: "summary", label: "Summary" },
+          { value: "reminder", label: "Due Reminder" }
+        ], activeMode)}
+        ${renderPaymentSummaryPreview(summaryText, `${group?.name || "Payment group"} ${activeMode}`)}
+        <div class="toolbar nowrap confirm-actions payment-summary-copy-actions">
+          <button class="btn primary" type="button" data-action="copy-payment-group-summary" data-payment-group="${escapeAttr(groupId)}" data-summary-mode="${escapeAttr(activeMode)}">${copyLabel}</button>
         </div>
       </div>
     </div>
-  `;
-}
-
-function renderPaymentHistoryItem(playerId, item) {
-  const amount = paymentHistoryAmount(item);
-  const subtitle = item.advanceAmount
-    ? `${currency(item.paidAmount)} paid, ${currency(item.advanceAmount)} Credit created`
-    : currency(amount);
-  const dateText = item.date ? formatDate(item.date) : item.type === "credit" ? "Current Credit" : "Manual payment";
-  const transactionBacked = item.type === "session"
-    ? paymentHasActiveTransactionAllocation(item.id, playerId)
-    : item.type === "activity" && activityShareHasActiveTransactionAllocation(item.id, playerId);
-  const canReverse = item.type !== "credit" && !transactionBacked;
-  return `
-    <article class="row-card payment-history-item">
-      <div class="row-main">
-        <div>
-          <h3 class="row-title">${escapeHtml(item.label)}</h3>
-          <p class="row-subtitle">${escapeHtml(dateText)} - ${escapeHtml(subtitle)}</p>
-        </div>
-        ${canReverse ? `<button class="btn icon-only danger" type="button" data-action="delete-payment-history" data-player="${escapeAttr(playerId)}" data-history-type="${escapeAttr(item.type)}" data-session="${escapeAttr(item.type === "session" ? item.id : "")}" data-activity="${escapeAttr(item.type === "activity" ? item.id : "")}" data-amount="${escapeAttr(amount)}" aria-label="Reverse ${escapeAttr(item.label)} payment" title="Reverse">${icon("trash")}</button>` : ""}
-      </div>
-    </article>
   `;
 }
 

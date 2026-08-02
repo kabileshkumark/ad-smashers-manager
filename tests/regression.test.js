@@ -1374,7 +1374,7 @@ test("players with zero attendance move to the end without payment copy action",
   assert.doesNotMatch(html, /Copy Payment History/);
 });
 
-test("player payment copy includes full history and due reminder options", () => {
+test("payment summary previews use current ledger totals and keep history transaction-only", () => {
   const context = createAppContext();
   setAppState(
     context,
@@ -1446,54 +1446,68 @@ test("player payment copy includes full history and due reminder options", () =>
     `
   );
 
-  const text = run(context, 'buildPlayerPaymentHistoryCopy("p1")');
-  assert.match(text, /Aishu - Payment History/);
-  assert.match(text, /Attendance: 2/);
-  assert.match(text, /Current Status: 35 AED owed/);
-  assert.match(text, /Sessions[\s\S]*Due 40 AED, Cash recorded 10 AED, Own Credit applied 5 AED, Pending 25 AED/);
+  const text = run(context, 'buildPlayerPaymentSummaryCopy("p1")');
+  assert.match(text, /\*Payment Summary - Aishu\*/);
+  assert.match(text, /Due before adjustments: 40 AED/);
+  assert.match(text, /Credit applied: 5 AED/);
+  assert.match(text, /\*Amount due: 35 AED\*/);
+  assert.match(text, /\*Pending items\*[\s\S]*Dinner: 10 AED/);
+  assert.equal((text.match(/session: (?:20|5) AED/g) || []).length, 2);
   assert.doesNotMatch(text, /Advance applied/);
-  assert.doesNotMatch(text, /19:00|21:00| at /);
-  assert.match(text, /Activities[\s\S]*Dinner: Share 15 AED, Cash recorded 5 AED, Pending 10 AED/);
-  assert.doesNotMatch(text, /Paid by Kabilesh/);
-  assert.match(text, /Coverage[\s\S]*Own Credit applied: 5 AED/);
-  assert.match(text, /Coverage[\s\S]*Remaining due: 35 AED/);
+  assert.doesNotMatch(text, /Payment Transactions|Cash recorded|Attendance:/);
 
-  const dueText = run(context, 'buildPlayerDueHistoryCopy("p1")');
-  assert.match(dueText, /Aishu - Payment Reminder/);
-  assert.match(dueText, /Total Due Before Coverage: 40 AED/);
-  assert.match(dueText, /Revised Due: 35 AED/);
-  assert.match(dueText, /Sessions[\s\S]*Due 40 AED, Cash recorded 10 AED, Own Credit applied 5 AED, Pending 25 AED/);
-  assert.doesNotMatch(dueText, /19:00|21:00| at |No session dues|No activity dues/);
-  assert.match(dueText, /Activities[\s\S]*Dinner: Share 15 AED, Cash recorded 5 AED, Pending 10 AED/);
+  const dueText = run(context, 'buildPlayerPaymentReminderCopy("p1")');
+  assert.match(dueText, /\*Payment Reminder - Aishu\*/);
+  assert.match(dueText, /Due before adjustments: 40 AED/);
+  assert.match(dueText, /\*Amount due: 35 AED\*/);
+  assert.match(dueText, /Dinner: 10 AED/);
 
-  const modalHtml = run(context, 'renderPlayerPaymentDetailsModal("p1")');
-  assert.match(modalHtml, /Payment Details/);
-  assert.match(modalHtml, /Copy Full History/);
-  assert.match(modalHtml, /copy-player-payment-history/);
-  assert.match(modalHtml, /Copy Due History/);
-  assert.match(modalHtml, /copy-player-due-history/);
+  const modalHtml = run(context, 'renderPlayerPaymentSummaryModal("p1")');
+  assert.match(modalHtml, /Payment Summary/);
+  assert.match(modalHtml, /Shareable preview/);
+  assert.match(modalHtml, /Summary/);
+  assert.match(modalHtml, /Due Reminder/);
+  assert.match(modalHtml, /Copy Summary/);
+  assert.match(modalHtml, /copy-player-payment-summary/);
+  assert.doesNotMatch(modalHtml, /Copy Full History|Copy Due History/);
+  const reminderModalHtml = run(context, 'renderPlayerPaymentSummaryModal("p1", "reminder")');
+  assert.match(reminderModalHtml, /Copy Reminder/);
+  assert.match(reminderModalHtml, /data-summary-mode="reminder"/);
 
   const groupCardHtml = run(context, 'renderPaymentGroupCard(getPaymentGroup("copy-group"))');
-  assert.match(groupCardHtml, /open-payment-group-copy/);
-  assert.match(groupCardHtml, /Copy Payment Details/);
+  assert.match(groupCardHtml, /open-payment-group-summary/);
+  assert.match(groupCardHtml, /View Payment Summary/);
   assert.match(groupCardHtml, /payment-group-details/);
   const groupAmountInput = groupCardHtml.match(/<input[^>]*name="amountPaid"[^>]*>/)?.[0] || "";
   assert.ok(groupAmountInput);
   assert.doesNotMatch(groupAmountInput, /\svalue=/);
   assert.match(groupAmountInput, /placeholder="0"/);
 
-  const groupModalHtml = run(context, 'renderPaymentGroupCopyModal("copy-group")');
-  assert.match(groupModalHtml, /Copy Full History/);
-  assert.match(groupModalHtml, /copy-payment-group-history/);
-  assert.match(groupModalHtml, /Copy Due History/);
-  assert.match(groupModalHtml, /copy-payment-group-due-history/);
+  const groupModalHtml = run(context, 'renderPaymentGroupSummaryModal("copy-group")');
+  assert.match(groupModalHtml, /Payment Group Summary/);
+  assert.match(groupModalHtml, /Shareable preview/);
+  assert.match(groupModalHtml, /Copy Summary/);
+  assert.match(groupModalHtml, /copy-payment-group-summary/);
 
-  const groupDueText = run(context, 'buildPaymentGroupDueHistoryCopy("copy-group")');
-  assert.match(groupDueText, /Aishu Group - Payment Reminder/);
-  assert.match(groupDueText, /Members: Kabilesh, Aishu/);
-  assert.match(groupDueText, /Revised Due: 35 AED/);
-  assert.match(groupDueText, /Sessions[\s\S]*Due 40 AED, Cash recorded 10 AED, Own Credit applied 5 AED, Pending 25 AED/);
-  assert.match(groupDueText, /Activities[\s\S]*Dinner: Share 15 AED, Cash recorded 5 AED, Pending 10 AED/);
+  const groupText = run(context, 'buildPaymentGroupSummaryCopy("copy-group")');
+  assert.match(groupText, /\*Payment Summary - Aishu Group\*/);
+  assert.match(groupText, /Paid by: Kabilesh/);
+  assert.match(groupText, /Members: Kabilesh, Aishu/);
+  assert.match(groupText, /\*Total due: 35 AED\*/);
+  assert.match(groupText, /\*By member\*[\s\S]*\*Kabilesh - Clear\*[\s\S]*No pending items/);
+  assert.match(groupText, /\*Aishu - 35 AED due\*[\s\S]*Dinner: 10 AED/);
+  assert.equal(run(context, 'paymentGroupSummaryPlayerIds(getPaymentGroup("copy-group")).reduce((total, id) => total + paymentSummaryCoverage([id]).balance, 0)'), 35);
+
+  const groupReminder = run(context, 'buildPaymentGroupReminderCopy("copy-group")');
+  assert.match(groupReminder, /\*Payment Reminder - Aishu Group\*/);
+  assert.match(groupReminder, /\*Aishu - 35 AED due\*/);
+
+  const playerHistoryHtml = run(context, 'renderPaymentHistoryModal("p1")');
+  assert.match(playerHistoryHtml, /No recorded payment transactions yet/);
+  assert.doesNotMatch(playerHistoryHtml, /Current Records|Dinner|Pending items/);
+  const groupHistoryHtml = run(context, 'renderGroupPaymentHistoryModal("copy-group")');
+  assert.match(groupHistoryHtml, /No recorded group payment transactions yet/);
+  assert.doesNotMatch(groupHistoryHtml, /Current Allocation|Credit applied|Pending items/);
 });
 
 test("new session modal defaults from date and selects booking court", () => {
@@ -3418,9 +3432,9 @@ test("dashboard activity summary excludes shuttle purchase logs", () => {
   assert.match(shuttleHistoryHtml, /Shuttle Purchase History[\s\S]*120 AED across 1 purchase/);
   assert.match(shuttleHistoryHtml, /Shuttle bought[\s\S]*120 AED/);
 
-  const memberHistory = run(context, "buildPlayerPaymentHistoryCopy('member')");
-  assert.doesNotMatch(memberHistory, /Shuttle bought/);
-  assert.match(memberHistory, /Dinner/);
+  const memberSummary = run(context, "buildPlayerPaymentSummaryCopy('member')");
+  assert.doesNotMatch(memberSummary, /Shuttle bought/);
+  assert.match(memberSummary, /Dinner/);
 });
 
 test("dashboard financial totals are normalized to currency precision", () => {
@@ -3647,8 +3661,8 @@ test("player balance rows hide zero credit and label positive credit", () => {
   assert.doesNotMatch(html, /Credit/);
   assert.doesNotMatch(html, /Credit 0 AED/);
   assert.match(html, /player-balance-chip-pair[\s\S]*Due 7 AED/);
-  assert.match(html, /data-action="open-player-payment-details"[^>]*data-player="p1"/);
-  assert.match(html, /Copy Payment Details/);
+  assert.match(html, /data-action="open-player-payment-summary"[^>]*data-player="p1"/);
+  assert.match(html, /View Payment Summary/);
   assert.doesNotMatch(html, /row-subtitle/);
   assert.doesNotMatch(html, /ledger-list/);
   assert.doesNotMatch(html, /session - 12 AED/);
@@ -3791,24 +3805,32 @@ test("payments page records player advances and copies deduction summary", () =>
   assert.match(playerBalanceHtml, /Advance 180 AED/);
   assert.doesNotMatch(playerBalanceHtml, /Credit \d+(?:\.\d+)? AED/);
 
-  const copy = run(context, 'buildPlayerAdvanceSummaryCopy("payer")');
-  assert.match(copy, /Advance Payer - Advance Summary/);
-  assert.match(copy, /Advance Paid: 200 AED/);
-  assert.match(copy, /Deducted: 20 AED/);
-  assert.match(copy, /Balance: 180 AED/);
-  assert.match(copy, /Deductions[\s\S]*session: Deducted 20 AED, Bal adv 180 AED/);
+  const latestCopy = run(context, 'buildPlayerLatestAdvanceSummaryCopy("payer")');
+  assert.match(latestCopy, /\*Latest Advance - Advance Payer\*/);
+  assert.match(latestCopy, /Advance received: 200 AED/);
+  assert.match(latestCopy, /Deducted: 20 AED/);
+  assert.match(latestCopy, /\*Balance: 180 AED\*/);
+  assert.match(latestCopy, /\*Usage\*[\s\S]*session: 20 AED/);
+
+  const completeCopy = run(context, 'buildPlayerCompleteAdvanceSummaryCopy("payer")');
+  assert.match(completeCopy, /\*Complete Advance Summary - Advance Payer\*/);
+  assert.match(completeCopy, /Total received: 200 AED/);
+  assert.match(completeCopy, /Total deducted: 20 AED/);
 
   const detailsHtml = run(context, 'renderAdvanceDetailsModal("payer")');
   assert.match(detailsHtml, /Advance Summary/);
-  assert.match(detailsHtml, /Copy Summary/);
+  assert.match(detailsHtml, /Latest Advance/);
+  assert.match(detailsHtml, /Complete Summary/);
+  assert.match(detailsHtml, /Copy Latest Advance/);
   assert.match(detailsHtml, /copy-player-advance-summary/);
+  const completeDetailsHtml = run(context, 'renderAdvanceDetailsModal("payer", "complete")');
+  assert.match(completeDetailsHtml, /Copy Complete Summary/);
+  assert.match(completeDetailsHtml, /data-summary-mode="complete"/);
 
   const historyHtml = run(context, 'renderAdvanceHistoryModal("payer")');
   assert.match(historyHtml, /Advance History/);
-  assert.match(historyHtml, /Advance paid 200 AED, deducted 20 AED, balance 180 AED/);
-  assert.match(historyHtml, /advance-history-head/);
-  assert.match(historyHtml, /advance-history-actions/);
-  assert.match(historyHtml, /advance-deduction-list/);
+  assert.match(historyHtml, /Advance Payment[\s\S]*Advance received 200 AED/);
+  assert.doesNotMatch(historyHtml, /deducted|balance 180 AED|Usage|session:/);
   assert.match(historyHtml, /delete-payment-transaction/);
 
   assert.equal(run(context, 'reversePaymentTransaction(state.paymentTransactions[0].id)'), true);
@@ -3855,15 +3877,93 @@ test("advance summary moves to the next payment cycle after the prior advance is
   assert.equal(run(context, 'playerAvailableAdvance("payer")'), 300);
   assert.deepEqual(jsonValue(context, 'playerAdvanceSummary("payer")'), { received: 300, deducted: 210, balance: 90 });
 
-  const copy = run(context, 'buildPlayerAdvanceSummaryCopy("payer")');
-  assert.match(copy, /Cycle Payer - Advance Summary/);
-  assert.match(copy, /Advance Paid: 300 AED/);
-  assert.match(copy, /Deducted: 210 AED/);
-  assert.match(copy, /Balance: 90 AED/);
+  const latestCopy = run(context, 'buildPlayerLatestAdvanceSummaryCopy("payer")');
+  assert.match(latestCopy, /\*Latest Advance - Cycle Payer\*/);
+  assert.match(latestCopy, /Advance received: 100 AED/);
+  assert.match(latestCopy, /Deducted: 10 AED/);
+  assert.match(latestCopy, /\*Balance: 90 AED\*/);
+  assert.doesNotMatch(latestCopy, /200 AED received|Total received: 300 AED/);
+
+  const completeCopy = run(context, 'buildPlayerCompleteAdvanceSummaryCopy("payer")');
+  assert.match(completeCopy, /\*Complete Advance Summary - Cycle Payer\*/);
+  assert.match(completeCopy, /Total received: 300 AED/);
+  assert.match(completeCopy, /Total deducted: 210 AED/);
+  assert.match(completeCopy, /100 AED received[\s\S]*200 AED received/);
 
   const historyHtml = run(context, 'renderAdvanceHistoryModal("payer")');
-  assert.match(historyHtml, /Advance paid 100 AED, deducted 10 AED, balance 90 AED/);
-  assert.match(historyHtml, /Advance paid 200 AED, deducted 200 AED, balance 0 AED/);
+  assert.match(historyHtml, /Advance received 100 AED/);
+  assert.match(historyHtml, /Advance received 200 AED/);
+  assert.doesNotMatch(historyHtml, /deducted|balance 90 AED|balance 0 AED/);
+
+  assert.equal(run(context, 'reversePaymentTransaction(state.paymentTransactions.find((transaction) => transaction.amountPaid === 100).id)'), true);
+  const latestAfterReverse = run(context, 'buildPlayerLatestAdvanceSummaryCopy("payer")');
+  assert.match(latestAfterReverse, /Advance received: 200 AED/);
+  assert.doesNotMatch(latestAfterReverse, /Advance received: 100 AED/);
+  const completeAfterReverse = run(context, 'buildPlayerCompleteAdvanceSummaryCopy("payer")');
+  assert.match(completeAfterReverse, /Total received: 200 AED/);
+  assert.doesNotMatch(completeAfterReverse, /100 AED received/);
+  assert.match(run(context, 'renderAdvanceHistoryModal("payer")'), /Advance received 100 AED, transaction reversed/);
+});
+
+test("advance summary explains when one item is funded by the prior and latest advances", () => {
+  const context = createAppContext();
+  const response = {
+    id: "payer-response",
+    playerId: "payer",
+    voteOrder: 1,
+    attendanceChoice: "in",
+    guestCount: 0,
+    racketNeeded: false,
+    rawOptions: ["I'm in"]
+  };
+  setAppState(
+    context,
+    baseFixture({
+      players: [player("payer", "Rollover Payer")],
+      sessions: [
+        baseSession({
+          id: "advance-rollover-old",
+          date: isoDateFromToday(-3),
+          perPersonAmount: 99,
+          totalPaid: 99,
+          responses: [response]
+        })
+      ]
+    })
+  );
+
+  run(context, 'recordPlayerAdvance("payer", 100)');
+  assert.deepEqual(jsonValue(context, 'playerAdvanceSummary("payer")'), { received: 100, deducted: 99, balance: 1 });
+
+  const nextSession = baseSession({
+    id: "advance-rollover-next",
+    date: isoDateFromToday(-2),
+    perPersonAmount: 25,
+    totalPaid: 25,
+    responses: [{ ...response, id: "payer-response-next" }]
+  });
+  run(context, `state.sessions.push(${JSON.stringify(nextSession)})`);
+  run(context, "syncSessionPayments(state.sessions[state.sessions.length - 1])");
+  run(context, 'recordPlayerAdvance("payer", 200)');
+
+  assert.deepEqual(jsonValue(context, 'playerAdvanceSummary("payer")'), { received: 300, deducted: 124, balance: 176 });
+
+  const latestCopy = run(context, 'buildPlayerLatestAdvanceSummaryCopy("payer")');
+  assert.match(latestCopy, /Advance received: 200 AED/);
+  assert.match(latestCopy, /Deducted: 24 AED/);
+  assert.match(latestCopy, /\*Balance: 176 AED\*/);
+  assert.match(
+    latestCopy,
+    /session: 24 AED from this Advance \(1 AED from an earlier Advance; 25 AED covered by Advances in total\)/
+  );
+
+  const completeCopy = run(context, 'buildPlayerCompleteAdvanceSummaryCopy("payer")');
+  assert.match(completeCopy, /Total received: 300 AED/);
+  assert.match(completeCopy, /Total deducted: 124 AED/);
+  assert.match(
+    completeCopy,
+    /session: 1 AED from this Advance \(24 AED from a later Advance; 25 AED covered by Advances in total\)/
+  );
 });
 
 test("legacy advance section entries are not double counted as credit", () => {
@@ -3991,9 +4091,13 @@ test("payer Credit automatically covers another payment-group member without bei
   const groupCardHtml = run(context, 'renderPaymentGroupCard(getPaymentGroup("yogesh-group"))');
   assert.match(groupCardHtml, /Clear/);
   assert.doesNotMatch(groupCardHtml, /Credit applied|Credit owned|Advance applied/);
+  const groupSummaryText = run(context, 'buildPaymentGroupSummaryCopy("yogesh-group")');
+  assert.match(groupSummaryText, /Credit applied: 80 AED/);
+  assert.match(groupSummaryText, /\*Yogesh - Clear\*[\s\S]*Credit applied: 40 AED/);
+  assert.match(groupSummaryText, /\*Abhineya - Clear\*[\s\S]*Credit applied: 40 AED/);
   const groupHistoryHtml = run(context, 'renderGroupPaymentHistoryModal("yogesh-group")');
-  assert.match(groupHistoryHtml, /40 AED of Yogesh Credit applied to group members/);
-  assert.match(groupHistoryHtml, /Credit owned by Yogesh: 122 AED total; 40 AED used for Yogesh; 40 AED used for group members; 42 AED remaining/);
+  assert.match(groupHistoryHtml, /No recorded group payment transactions yet/);
+  assert.doesNotMatch(groupHistoryHtml, /Current Allocation|Credit owned|Credit applied/);
   assert.equal(run(context, 'playerBalance("member")'), 0);
   assert.equal(run(context, 'paymentEffectiveStatus(getSession("member-session"), getSession("member-session").payments.member)'), "Paid");
   assert.equal(run(context, 'state.sessions.find((session) => session.id === "member-session").payments.member.paidAmount'), 0);
@@ -4075,7 +4179,10 @@ test("later payer dues do not reclaim Credit already applied to an earlier group
   assert.equal(run(context, 'playerBalance("member")'), 0);
   assert.equal(run(context, 'playerBalance("payer")'), 8);
   assert.equal(run(context, 'playerRemainingCredit("payer")'), 0);
-  assert.match(run(context, 'renderGroupPaymentHistoryModal("yogesh-group")'), /Credit owned by Yogesh: 122 AED total; 82 AED used for Yogesh; 40 AED used for group members; 0 AED remaining/);
+  const groupSummaryText = run(context, 'buildPaymentGroupSummaryCopy("yogesh-group")');
+  assert.match(groupSummaryText, /Credit applied: 122 AED/);
+  assert.match(groupSummaryText, /\*Yogesh - 8 AED due\*/);
+  assert.match(groupSummaryText, /\*Abhineya - Clear\*/);
   assert.equal(run(context, 'playerRemainingCredit("member")'), 0);
 });
 
@@ -4236,9 +4343,11 @@ test("payment-group payer Advance covers member dues after the payer's own dues"
   assert.equal(run(context, 'state.sessions[0].payments.member.status'), "Pending");
   assert.match(run(context, 'ledgerCoverageDescription(paymentCoverageDetails(state.sessions[0], state.sessions[0].payments.member))'), /40 AED Advance from Yogesh/);
   assert.doesNotMatch(run(context, 'renderPaymentGroupCard(getPaymentGroup("yogesh-group"))'), /Advance applied/);
-  assert.match(run(context, 'renderGroupPaymentHistoryModal("yogesh-group")'), /40 AED Advance applied from Yogesh/);
+  const groupSummaryText = run(context, 'buildPaymentGroupSummaryCopy("yogesh-group")');
+  assert.match(groupSummaryText, /Advance applied: 40 AED/);
+  assert.match(groupSummaryText, /\*Abhineya - Clear\*[\s\S]*Advance applied: 40 AED/);
   assert.deepEqual(jsonValue(context, 'playerAdvanceSummary("payer")'), { received: 82, deducted: 40, balance: 42 });
-  assert.match(run(context, 'buildPlayerAdvanceSummaryCopy("payer")'), /session - Abhineya: Deducted 40 AED, Bal adv 42 AED/);
+  assert.match(run(context, 'buildPlayerLatestAdvanceSummaryCopy("payer")'), /session - Abhineya: 40 AED/);
   assert.deepEqual(jsonValue(context, 'applyGroupPayment({ paidById: "payer", playerIds: ["payer", "member"], amountPaid: 0, groupId: "yogesh-group" })'), {
     applied: 0,
     creditUsed: 0,
@@ -4325,14 +4434,17 @@ test("Kuberan backup scenario spends older Credit before newer Advance", () => {
     covered: 180,
     outstanding: 0
   });
-  assert.match(run(context, 'buildPaymentGroupPaymentHistoryCopy("kuberan-group")'), /Payment Group Advance[\s\S]*75 AED Advance applied from Kuberan/);
+  const kuberanSummaryText = run(context, 'buildPaymentGroupSummaryCopy("kuberan-group")');
+  assert.match(kuberanSummaryText, /Advance applied: 145 AED/);
+  assert.match(kuberanSummaryText, /Credit applied: 35 AED/);
+  assert.match(kuberanSummaryText, /\*Kalai - Clear\*[\s\S]*Advance applied: 75 AED/);
   assert.match(run(context, 'renderPlayerBalanceRow(getPlayer("kuberan"))'), /Advance 355 AED/);
   assert.doesNotMatch(run(context, 'renderPlayerBalanceRow(getPlayer("kuberan"))'), /Advance 0 AED|Credit 0 AED/);
   const kuberanCardHtml = run(context, 'renderPaymentGroupCard(getPaymentGroup("kuberan-group"))');
   assert.doesNotMatch(kuberanCardHtml, /Advance applied|Credit applied|Credit owned/);
   const kuberanHistoryHtml = run(context, 'renderGroupPaymentHistoryModal("kuberan-group")');
-  assert.match(kuberanHistoryHtml, /75 AED Advance applied from Kuberan/);
-  assert.match(kuberanHistoryHtml, /Credit owned by Kuberan: 35 AED total; 35 AED used for Kuberan; 0 AED used for group members; 0 AED remaining/);
+  assert.match(kuberanHistoryHtml, /Kuberan[\s\S]*35 AED Credit added[\s\S]*35 AED cash/);
+  assert.doesNotMatch(kuberanHistoryHtml, /Current Allocation|75 AED Advance applied|Credit owned/);
   assert.doesNotMatch(run(context, 'renderPlayerBalanceRow(getPlayer("kalai"))'), /Due/);
 });
 
@@ -4563,7 +4675,10 @@ test("individual cash receipts keep reversible audit history", () => {
   assert.equal(run(context, 'state.sessions[0].payments.payer.paidAmount'), 0);
   assert.equal(run(context, 'playerRemainingCredit("payer")'), 0);
   assert.equal(run(context, 'playerBalance("payer")'), 20);
-  assert.match(run(context, 'playerPaymentTransactionCopyLines("payer")[0]'), /\[REVERSED\]/);
+  const historyHtml = run(context, 'renderPaymentHistoryModal("payer")');
+  assert.match(historyHtml, /Player Payment/);
+  assert.match(historyHtml, /transaction reversed/);
+  assert.doesNotMatch(historyHtml, /Current Records|Pending items/);
 });
 
 test("active transaction trash offers Delete and Reverse with distinct audit outcomes", () => {
@@ -5565,30 +5680,33 @@ test("shared icon actions and compact payment group controls keep stable dimensi
   assert.match(css, /@media \(min-width:\s*390px\) and \(max-width:\s*430px\)[\s\S]*?\.modal-card \.btn:not\(\.icon-only\):not\(\.icon-button\)\s*\{[^}]*min-height:\s*56px !important/);
 });
 
-test("payment history rows keep text column wide with compact actions", () => {
+test("payment history rows and summary previews stay responsive", () => {
   const css = fs.readFileSync(path.join(ROOT, "styles.css"), "utf8");
   const historyRows = css.match(/\.payment-history-item \.row-main,\s*\.payment-transaction-row \.row-main\s*\{[^}]+\}/)?.[0] || "";
   const historyToolbar = css.match(/\.payment-history-modal \.toolbar\.nowrap\s*\{[^}]+\}/)?.[0] || "";
-  const advanceHistoryLayout = css.match(/\.advance-history-layout\s*\{[^}]+\}/)?.[0] || "";
-  const advanceHistoryHead = css.match(/\.advance-history-head\s*\{[^}]+\}/)?.[0] || "";
-  const advanceHistoryActions = css.match(/\.payment-history-modal \.toolbar\.advance-history-actions\s*\{[^}]+\}/)?.[0] || "";
+  const summaryModes = css.match(/\.summary-mode-control\s*\{[^}]+\}/)?.[0] || "";
+  const summaryPreview = css.match(/\.payment-summary-preview\s*\{[^}]+\}/)?.[0] || "";
+  const summaryActions = css.match(/\.payment-summary-copy-actions\s*\{[^}]+\}/)?.[0] || "";
 
   assert.match(historyRows, /grid-template-columns:\s*minmax\(0,\s*1fr\) auto/);
   assert.doesNotMatch(historyRows, /minmax\(192px,\s*232px\)/);
   assert.match(historyToolbar, /justify-content:\s*flex-end/);
-  assert.match(advanceHistoryLayout, /display:\s*block/);
-  assert.match(advanceHistoryHead, /grid-template-columns:\s*minmax\(0,\s*1fr\) auto/);
-  assert.match(advanceHistoryActions, /grid-template-columns:\s*auto 44px/);
-  assert.match(advanceHistoryActions, /width:\s*auto/);
+  assert.match(summaryModes, /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(summaryPreview, /max-height:\s*min\(52vh,\s*520px\)/);
+  assert.match(summaryPreview, /overflow:\s*auto/);
+  assert.match(summaryPreview, /overflow-wrap:\s*anywhere/);
+  assert.match(summaryPreview, /white-space:\s*pre-wrap/);
+  assert.match(summaryActions, /justify-content:\s*flex-end/);
 });
 
-test("modal values stay left aligned and focused fields scroll above mobile keyboards", async () => {
+test("modal and page fields stay visible above mobile keyboards", async () => {
   const css = fs.readFileSync(path.join(ROOT, "styles.css"), "utf8");
   assert.match(css, /\.modal-card \.field:not\(\.compact-field\) > \.input,[\s\S]*?\.modal-card \.field:not\(\.compact-field\) > \.select\s*\{[^}]*text-align:\s*left/);
   assert.match(css, /\.modal-card \.field:not\(\.compact-field\) > \.select\s*\{[^}]*padding-left:\s*var\(--modal-control-padding-x\)[^}]*text-align-last:\s*left/);
   assert.match(css, /\.modal-card \.field:not\(\.compact-field\) > \.input::-webkit-date-and-time-value\s*\{[^}]*justify-content:\s*flex-start[^}]*text-align:\s*left/);
   assert.match(css, /@media \(max-width:\s*640px\)[\s\S]*?\.modal-backdrop\s*\{[^}]*align-items:\s*start[^}]*overflow-y:\s*auto/);
   assert.match(css, /@media \(min-width:\s*390px\) and \(max-width:\s*430px\)[\s\S]*?\.modal-card \.field:not\(\.compact-field\) > \.select\s*\{[^}]*padding-left:\s*14px !important[^}]*text-align-last:\s*left !important/);
+  assert.match(css, /body\.is-keyboard-control-focused \.bottom-nav\s*\{[^}]*opacity:\s*0[^}]*pointer-events:\s*none/);
 
   const context = createAppContext();
   const modalSelector = run(context, "MODAL_TEXT_CONTROL_SELECTOR");
@@ -5616,6 +5734,42 @@ test("modal values stay left aligned and focused fields scroll above mobile keyb
   assert.equal(context.__modalScrollOptions[0].block, "center");
   assert.equal(context.__modalScrollOptions[0].inline, "nearest");
   assert.equal(context.__modalScrollOptions[0].behavior, "smooth");
+
+  const pageSelector = run(context, "PAGE_TEXT_CONTROL_SELECTOR");
+  assert.match(pageSelector, /#main-content input/);
+  context.window.innerHeight = 800;
+  context.window.visualViewport = { height: 360, offsetTop: 0 };
+  context.__pageScrollOptions = [];
+  context.__pageMain = {
+    scrollTop: 400,
+    getBoundingClientRect() {
+      return { top: 72, bottom: 800 };
+    },
+    scrollTo(options) {
+      context.__pageScrollOptions.push(options);
+    }
+  };
+  context.__pageField = {
+    getBoundingClientRect() {
+      return { top: 600, bottom: 644 };
+    }
+  };
+  context.__pageInput = {
+    matches(selector) {
+      return selector === pageSelector;
+    },
+    closest(selector) {
+      if (selector === "#main-content") return context.__pageMain;
+      if (selector.includes(".field")) return context.__pageField;
+      return null;
+    }
+  };
+
+  assert.equal(run(context, "scrollFocusedPageControlIntoView(__pageInput, 0)"), true);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(context.__pageScrollOptions.length, 1);
+  assert.equal(context.__pageScrollOptions[0].top, 700);
+  assert.equal(context.__pageScrollOptions[0].behavior, "smooth");
 });
 
 test("app shell version is consistent with the configured technical build", () => {

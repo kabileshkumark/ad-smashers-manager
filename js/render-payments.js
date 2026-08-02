@@ -286,9 +286,6 @@ function renderPaymentGroupCard(group) {
   const memberCount = paymentGroupMemberCount(group);
   const payerName = group.payerId ? getPlayerName(group.payerId) : "Not set";
   const historyItems = paymentGroupTransactions(group.id);
-  const hasCoverageHistory = summary.advanceApplied > 0
-    || summary.creditApplied > 0
-    || Number(group.payerId ? playerCreditAccountSummary(group.payerId).total : 0) > 0;
   const balanceLabel = balance > 0 ? `${currency(balance)} due` : "Clear";
   const balanceClass = balance > 0 ? "gold" : "green";
   return `
@@ -311,8 +308,8 @@ function renderPaymentGroupCard(group) {
             <input class="input" type="number" name="amountPaid" min="0" step="0.01" inputmode="decimal" autocomplete="off" placeholder="0" />
           </label>
           <button class="btn primary icon-only" type="submit" ${balance > 0 ? "" : "disabled"} aria-label="Apply group payment for ${escapeAttr(group.name || "group")}" title="Apply group payment">${icon("wallet")}</button>
-          <button class="btn icon-only" type="button" data-action="open-payment-group-copy" data-payment-group="${escapeAttr(group.id)}" aria-label="Copy payment details for ${escapeAttr(group.name || "group")}" title="Copy Payment Details">${icon("copy")}</button>
-          <button class="btn icon-only" type="button" data-action="open-group-payment-history" data-payment-group="${escapeAttr(group.id)}" ${historyItems.length || hasCoverageHistory ? "" : "disabled"} aria-label="Payment history for ${escapeAttr(group.name || "group")}" title="Payment history">${icon("history")}</button>
+          <button class="btn icon-only" type="button" data-action="open-payment-group-summary" data-payment-group="${escapeAttr(group.id)}" aria-label="View payment summary for ${escapeAttr(group.name || "group")}" title="View Payment Summary">${icon("eye")}</button>
+          <button class="btn icon-only" type="button" data-action="open-group-payment-history" data-payment-group="${escapeAttr(group.id)}" ${historyItems.length ? "" : "disabled"} aria-label="Payment history for ${escapeAttr(group.name || "group")}" title="Payment history">${icon("history")}</button>
           <button class="btn icon-only" type="button" data-action="edit-payment-group" data-payment-group="${escapeAttr(group.id)}" aria-label="Edit ${escapeAttr(group.name || "group")}" title="Edit">${icon("edit")}</button>
           <button class="btn icon-only danger" type="button" data-action="delete-payment-group" data-payment-group="${escapeAttr(group.id)}" aria-label="Delete ${escapeAttr(group.name || "group")}" title="Delete">${icon("trash")}</button>
         </div>
@@ -379,13 +376,17 @@ function renderAdvanceRow(player) {
   `;
 }
 
-function renderAdvanceDetailsModal(playerId = "") {
+function renderAdvanceDetailsModal(playerId = "", mode = "latest") {
   const player = getPlayer(playerId);
   const playerName = player?.name || player?.displayName || "Player";
-  const summary = playerAdvanceAggregateSummary(playerId);
+  const activeMode = mode === "complete" ? "complete" : "latest";
+  const summaryText = activeMode === "complete"
+    ? buildPlayerCompleteAdvanceSummaryCopy(playerId)
+    : buildPlayerLatestAdvanceSummaryCopy(playerId);
+  const copyLabel = activeMode === "complete" ? "Copy Complete Summary" : "Copy Latest Advance";
   return `
     <div class="modal-backdrop" data-modal-backdrop>
-      <div class="modal-card payment-history-modal" role="dialog" aria-modal="true" aria-labelledby="advance-details-modal-title">
+      <div class="modal-card payment-summary-modal" role="dialog" aria-modal="true" aria-labelledby="advance-details-modal-title">
         <div class="section-heading">
           <div>
             <h2 class="modal-title" id="advance-details-modal-title">Advance Summary</h2>
@@ -393,20 +394,13 @@ function renderAdvanceDetailsModal(playerId = "") {
           </div>
           <button class="btn icon-button" type="button" data-action="close-modal" aria-label="Close">X</button>
         </div>
-        <div class="meta-grid advance-meta-grid">
-          <div class="meta"><span>Advance Paid</span><strong>${currency(summary.received)}</strong></div>
-          <div class="meta"><span>Deducted</span><strong>${currency(summary.deducted)}</strong></div>
-          <div class="meta"><span>Balance</span><strong>${currency(summary.balance)}</strong></div>
-        </div>
-        <div class="payment-history-list">
-          ${
-            summary.deductions.length
-              ? summary.deductions.map((deduction) => renderAdvanceDeductionRow(deduction)).join("")
-              : `<div class="empty">No deductions from this advance yet.</div>`
-          }
-        </div>
-        <div class="toolbar nowrap confirm-actions">
-          <button class="btn primary" type="button" data-action="copy-player-advance-summary" data-player="${escapeAttr(playerId)}">Copy Summary</button>
+        ${renderPaymentSummaryModeControl([
+          { value: "latest", label: "Latest Advance" },
+          { value: "complete", label: "Complete Summary" }
+        ], activeMode)}
+        ${renderPaymentSummaryPreview(summaryText, `${playerName} ${activeMode} Advance`)}
+        <div class="toolbar nowrap confirm-actions payment-summary-copy-actions">
+          <button class="btn primary" type="button" data-action="copy-player-advance-summary" data-player="${escapeAttr(playerId)}" data-summary-mode="${escapeAttr(activeMode)}">${copyLabel}</button>
         </div>
       </div>
     </div>
@@ -444,40 +438,20 @@ function renderAdvanceHistoryRow(summary) {
   const canPurge = paymentTransactionCanBePurged(summary.transaction);
   return `
     <article class="row-card payment-transaction-row advance-history-row">
-      <div class="row-main advance-history-layout">
-        <div class="advance-history-head">
-          <div class="advance-history-summary">
-            <h3 class="row-title">${summary.date ? escapeHtml(formatDate(summary.date)) : "Date not set"}</h3>
-            <p class="row-subtitle">Advance paid ${currency(summary.received)}, deducted ${currency(summary.deducted)}, balance ${currency(summary.balance)}${isActive ? "" : ", transaction reversed"}</p>
-          </div>
-          <div class="toolbar nowrap advance-history-actions">
-            <span class="badge ${isActive ? (summary.balance ? "teal" : "green") : "gold"}">${isActive ? `${currency(summary.balance)} balance` : "Reversed"}</span>
-            ${
-              isActive
-                ? `<button class="btn icon-only danger" type="button" data-action="delete-payment-transaction" data-transaction="${escapeAttr(summary.id)}" aria-label="Delete or reverse advance payment" title="Delete or Reverse">${icon("trash")}</button>`
-                : canPurge
-                  ? `<button class="btn icon-only danger" type="button" data-action="delete-reversed-payment-transaction" data-transaction="${escapeAttr(summary.id)}" aria-label="Permanently delete reversed advance record" title="Delete Reversed Record">${icon("trash")}</button>`
-                  : ""
-            }
-          </div>
-        </div>
-        ${
-          summary.deductions.length
-            ? `<div class="payment-history-list advance-deduction-list">${summary.deductions.map((deduction) => renderAdvanceDeductionRow(deduction)).join("")}</div>`
-            : `<p class="row-subtitle advance-history-empty">No deductions from this advance yet.</p>`
-        }
-      </div>
-    </article>
-  `;
-}
-
-function renderAdvanceDeductionRow(deduction) {
-  return `
-    <article class="row-card payment-history-item advance-deduction-row">
       <div class="row-main">
         <div>
-          <h3 class="row-title">${escapeHtml(deduction.label)}</h3>
-          <p class="row-subtitle">Deducted ${currency(deduction.amount)} - balance ${currency(deduction.balanceAfter)}</p>
+          <h3 class="row-title">Advance Payment</h3>
+          <p class="row-subtitle">${summary.date ? escapeHtml(formatDate(summary.date)) : "Date not set"} - Advance received ${currency(summary.received)}${isActive ? "" : ", transaction reversed"}</p>
+        </div>
+        <div class="toolbar nowrap">
+          <span class="badge ${isActive ? "green" : "gold"}">${isActive ? currency(summary.received) : "Reversed"}</span>
+          ${
+            isActive
+              ? `<button class="btn icon-only danger" type="button" data-action="delete-payment-transaction" data-transaction="${escapeAttr(summary.id)}" aria-label="Delete or reverse advance payment" title="Delete or Reverse">${icon("trash")}</button>`
+              : canPurge
+                ? `<button class="btn icon-only danger" type="button" data-action="delete-reversed-payment-transaction" data-transaction="${escapeAttr(summary.id)}" aria-label="Permanently delete reversed advance record" title="Delete Reversed Record">${icon("trash")}</button>`
+                : ""
+          }
         </div>
       </div>
     </article>
@@ -487,7 +461,6 @@ function renderAdvanceDeductionRow(deduction) {
 function renderGroupPaymentHistoryModal(groupId = "") {
   const group = getPaymentGroup(groupId);
   const transactions = paymentGroupTransactions(groupId);
-  const coverageHistory = renderPaymentGroupCoverageHistory(group);
   return `
     <div class="modal-backdrop" data-modal-backdrop>
       <div class="modal-card payment-history-modal" role="dialog" aria-modal="true" aria-labelledby="group-payment-history-modal-title">
@@ -499,39 +472,10 @@ function renderGroupPaymentHistoryModal(groupId = "") {
           <button class="btn icon-button" type="button" data-action="close-modal" aria-label="Close">X</button>
         </div>
         <div class="payment-history-list">
-          ${coverageHistory}
-          ${transactions.length ? transactions.map((transaction) => renderGroupPaymentHistoryRow(transaction)).join("") : coverageHistory ? "" : `<div class="empty">No recorded group payments yet.</div>`}
+          ${transactions.length ? transactions.map((transaction) => renderGroupPaymentHistoryRow(transaction)).join("") : `<div class="empty">No recorded group payment transactions yet.</div>`}
         </div>
       </div>
     </div>
-  `;
-}
-
-function renderPaymentGroupCoverageHistory(group) {
-  if (!group) return "";
-  const summary = paymentGroupCoverageSummary(group);
-  const payerName = group.payerId ? getPlayerName(group.payerId) : "Not set";
-  const creditAccount = group.payerId ? playerCreditAccountSummary(group.payerId) : null;
-  const details = [];
-  if (summary.advanceApplied > 0) {
-    details.push(`${currency(summary.advanceApplied)} Advance applied from ${payerName}`);
-  }
-  if (summary.creditApplied > 0) {
-    details.push(`${currency(summary.creditApplied)} of ${payerName} Credit applied to group members`);
-  }
-  if (creditAccount?.total > 0) {
-    details.push(`Credit owned by ${payerName}: ${currency(creditAccount.total)} total; ${currency(creditAccount.ownApplied)} used for ${payerName}; ${currency(creditAccount.groupApplied)} used for group members; ${currency(creditAccount.remaining)} remaining`);
-  }
-  if (!details.length) return "";
-  return `
-    <article class="row-card payment-history-item payment-group-coverage-history">
-      <div class="row-main">
-        <div>
-          <h3 class="row-title">Current Allocation</h3>
-          ${details.map((detail) => `<p class="row-subtitle">${escapeHtml(detail)}</p>`).join("")}
-        </div>
-      </div>
-    </article>
   `;
 }
 
@@ -860,7 +804,6 @@ function renderPaymentGroupPlayerPicker(players, selectedPlayers, selectedGuests
 
 function renderPlayerBalanceRow(player) {
   const playerLabel = player.name || player.displayName || "Player";
-  const historyItems = playerPaymentCorrectionItems(player.id);
   const historyTransactions = playerPaymentTransactions(player.id);
   const covered = playerCoveredAmount(player.id);
   const roleCovered = playerSessionRoleCoveredAmount(player.id);
@@ -891,8 +834,8 @@ function renderPlayerBalanceRow(player) {
             <input class="input" type="number" name="amountPaid" min="0" max="999" step="1" placeholder="0" />
           </label>
           <button class="btn primary icon-only" type="submit" aria-label="Apply payment for ${escapeAttr(playerLabel)}" title="Apply payment">${icon("wallet")}</button>
-          <button class="btn icon-only" type="button" data-action="open-player-payment-details" data-player="${escapeAttr(player.id)}" aria-label="Copy payment details for ${escapeAttr(playerLabel)}" title="Copy Payment Details">${icon("copy")}</button>
-          <button class="btn icon-only" type="button" data-action="open-payment-history" data-player="${escapeAttr(player.id)}" ${historyItems.length || historyTransactions.length ? "" : "disabled"} aria-label="Payment history for ${escapeAttr(playerLabel)}" title="Payment history">${icon("history")}</button>
+          <button class="btn icon-only" type="button" data-action="open-player-payment-summary" data-player="${escapeAttr(player.id)}" aria-label="View payment summary for ${escapeAttr(playerLabel)}" title="View Payment Summary">${icon("eye")}</button>
+          <button class="btn icon-only" type="button" data-action="open-payment-history" data-player="${escapeAttr(player.id)}" ${historyTransactions.length ? "" : "disabled"} aria-label="Payment history for ${escapeAttr(playerLabel)}" title="Payment history">${icon("history")}</button>
         </div>
       </div>
     </form>
