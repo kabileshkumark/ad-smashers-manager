@@ -384,13 +384,8 @@ function handleClick(event) {
     return;
   }
   if (action === "confirm-delete" || action === "confirm-alternate-delete") {
-    if (executeConfirmedDelete(actionTarget)) {
-      render();
-    } else {
-      modal = null;
-      showToast("Could not delete.");
-      render();
-    }
+    executeConfirmedDelete(actionTarget);
+    render();
     return;
   }
 
@@ -855,8 +850,8 @@ function handleClick(event) {
     return;
   }
   if (action === "add-manual-attendance-guest" && session) {
-    if (sessionPlayerHasActiveFinancialState(session, actionTarget.dataset.player)) {
-      showToast("Clear this player's active cash, Advance, or Credit coverage before changing guests.");
+    if (sessionPlayerHasRecordedFinancialState(session, actionTarget.dataset.player)) {
+      showToast("Reverse this player's recorded session payment before changing guests. Automatic Advance/Credit coverage recalculates.");
       render();
       return;
     }
@@ -871,8 +866,8 @@ function handleClick(event) {
   }
   if (action === "add-response-guest" && session) {
     const response = session.responses.find((item) => item.id === actionTarget.dataset.response);
-    if (response?.playerId && sessionPlayerHasActiveFinancialState(session, response.playerId)) {
-      showToast("Clear this player's active cash, Advance, or Credit coverage before changing guests.");
+    if (response?.playerId && sessionPlayerHasRecordedFinancialState(session, response.playerId)) {
+      showToast("Reverse this player's recorded session payment before changing guests. Automatic Advance/Credit coverage recalculates.");
       render();
       return;
     }

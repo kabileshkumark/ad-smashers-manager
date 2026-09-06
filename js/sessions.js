@@ -196,11 +196,15 @@ function addManualAttendedPlayer(session, playerId, playersList = state.players,
   return true;
 }
 
-function removeManualAttendedPlayer(session, playerId, playersList = state.players, settings = state.settings) {
+function removeAttendedPlayer(session, playerId, playersList = state.players, settings = state.settings) {
   if (!session || !playerId) return false;
+  if (sessionPlayerHasRecordedFinancialState(session, playerId)) return false;
+  const attendedIds = effectiveAttendedPlayerIds(session, playersList);
+  if (!attendedIds.includes(playerId)) return false;
   const manualIds = manualAttendedPlayerIds(session, playersList);
-  if (!manualIds.includes(playerId)) return false;
-  session.attendedPlayerIds = storedAttendedPlayerIds(session).filter((id) => id !== playerId);
+  // A poll-derived no-show must not be restored by automatic attendance sync.
+  if (defaultAttendedPlayerIds(session, playersList).includes(playerId)) session.attendanceManual = true;
+  session.attendedPlayerIds = attendedIds.filter((id) => id !== playerId);
   setManualAttendedPlayerIds(session, manualIds.filter((id) => id !== playerId));
   clearManualGuestCount(session, playerId);
   ensureSessionAttendance(session, playersList);

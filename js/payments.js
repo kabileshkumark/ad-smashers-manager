@@ -757,9 +757,14 @@ function playerHasFinancialHistory(playerId) {
 function executeConfirmedDelete(target) {
   const deleteType = target.dataset.deleteType;
   const nextModal = modal?.previousModal || null;
+  const cannotDelete = () => {
+    modal = nextModal;
+    showToast("Could not delete.");
+    return false;
+  };
   if (deleteType === "session") {
     const session = getSession(target.dataset.session);
-    if (!session) return false;
+    if (!session) return cannotDelete();
     if (sessionHasFinancialHistory(session)) {
       modal = null;
       showToast(`This session has retained financial history and cannot be ${session.recurrence ? "cancelled" : "deleted"}.`);
@@ -777,7 +782,7 @@ function executeConfirmedDelete(target) {
   }
   if (deleteType === "court") {
     const court = state.courts.find((item) => item.id === target.dataset.court);
-    if (!court) return false;
+    if (!court) return cannotDelete();
     state.courts = state.courts.filter((item) => item.id !== court.id);
     const fallbackCourtId = state.courts[0]?.id || "";
     state.sessions.forEach((item) => {
@@ -790,7 +795,7 @@ function executeConfirmedDelete(target) {
   }
   if (deleteType === "player") {
     const player = getPlayer(target.dataset.player);
-    if (!player) return false;
+    if (!player) return cannotDelete();
     if (playerHasFinancialHistory(player.id)) {
       modal = null;
       showToast("This player has financial history and cannot be deleted.");
@@ -836,11 +841,11 @@ function executeConfirmedDelete(target) {
   }
   if (deleteType === "response") {
     const session = getSession(target.dataset.session);
-    if (!session) return false;
+    if (!session) return cannotDelete();
     const removedResponse = session.responses.find((response) => response.id === target.dataset.response);
-    if (removedResponse?.playerId && sessionPlayerHasActiveFinancialState(session, removedResponse.playerId)) {
+    if (removedResponse?.playerId && sessionPlayerHasRecordedFinancialState(session, removedResponse.playerId)) {
       modal = nextModal;
-      showToast("Clear this player's active cash, Advance, or Credit coverage before removing them.");
+      showToast("Reverse this player's recorded session payment before removing them. Automatic Advance/Credit coverage recalculates.");
       return false;
     }
     session.responses = session.responses.filter((response) => response.id !== target.dataset.response);
@@ -863,12 +868,12 @@ function executeConfirmedDelete(target) {
   if (deleteType === "response-guest") {
     const session = getSession(target.dataset.session);
     const response = session?.responses?.find((item) => item.id === target.dataset.response);
-    if (response?.playerId && sessionPlayerHasActiveFinancialState(session, response.playerId)) {
+    if (response?.playerId && sessionPlayerHasRecordedFinancialState(session, response.playerId)) {
       modal = nextModal;
-      showToast("Clear this player's active cash, Advance, or Credit coverage before changing guests.");
+      showToast("Reverse this player's recorded session payment before changing guests. Automatic Advance/Credit coverage recalculates.");
       return false;
     }
-    if (!session || !removeResponseGuest(session, target.dataset.response)) return false;
+    if (!session || !removeResponseGuest(session, target.dataset.response)) return cannotDelete();
     modal = nextModal;
     saveState();
     showToast("Guest removed.");
@@ -877,24 +882,13 @@ function executeConfirmedDelete(target) {
   if (deleteType === "attendance") {
     const session = getSession(target.dataset.session);
     const playerId = target.dataset.player;
-    if (!session || !playerId) return false;
-    if (sessionPlayerHasActiveFinancialState(session, playerId)) {
+    if (!session || !playerId) return cannotDelete();
+    if (sessionPlayerHasRecordedFinancialState(session, playerId)) {
       modal = nextModal;
-      showToast("Clear this player's active cash, Advance, or Credit coverage before removing attendance.");
+      showToast("Reverse this player's recorded session payment before removing attendance. Automatic Advance/Credit coverage recalculates.");
       return false;
     }
-    if (!removeManualAttendedPlayer(session, playerId)) {
-      ensureSessionAttendance(session);
-      session.attendanceManual = true;
-      session.attendedPlayerIds = session.attendedPlayerIds.filter((id) => id !== playerId);
-      setManualAttendedPlayerIds(
-        session,
-        manualAttendedPlayerIds(session).filter((id) => id !== playerId)
-      );
-      clearManualGuestCount(session, playerId);
-      syncSessionPayments(session);
-      applyAutomaticSessionStage(session);
-    }
+    if (!removeAttendedPlayer(session, playerId)) return cannotDelete();
     modal = nextModal;
     saveState();
     showToast("Player removed from attendance.");
@@ -903,10 +897,12 @@ function executeConfirmedDelete(target) {
   if (deleteType === "attendance-guest") {
     const session = getSession(target.dataset.session);
     const guestKey = target.dataset.guestKey;
-    if (!session || !guestKey) return false;
-    if (sessionPlayerHasActiveFinancialState(session, target.dataset.player)) {
+    if (!session || !guestKey) return cannotDelete();
+    const guest = effectiveAttendedEntries(session).find((entry) => entry.guest && entry.key === guestKey);
+    if (!guest) return cannotDelete();
+    if (sessionPlayerHasRecordedFinancialState(session, guest.playerId)) {
       modal = nextModal;
-      showToast("Clear this player's active cash, Advance, or Credit coverage before changing guests.");
+      showToast("Reverse this player's recorded session payment before changing guests. Automatic Advance/Credit coverage recalculates.");
       return false;
     }
     ensureSessionAttendance(session);
@@ -920,7 +916,7 @@ function executeConfirmedDelete(target) {
   }
   if (deleteType === "activity") {
     const activity = state.activities.find((item) => item.id === target.dataset.activity);
-    if (!activity) return false;
+    if (!activity) return cannotDelete();
     const reconciliation = reconcileActivityFinancials(activity, null, "activity-delete");
     state.activities = state.activities.filter((item) => item.id !== activity.id);
     syncSessionStages();
@@ -933,7 +929,7 @@ function executeConfirmedDelete(target) {
   }
   if (deleteType === "payment-group") {
     const group = getPaymentGroup(target.dataset.paymentGroup);
-    if (!group) return false;
+    if (!group) return cannotDelete();
     group.active = false;
     syncSessionStages();
     modal = null;
@@ -942,21 +938,21 @@ function executeConfirmedDelete(target) {
     return true;
   }
   if (deleteType === "payment-transaction") {
-    if (!reversePaymentTransaction(target.dataset.transaction)) return false;
+    if (!reversePaymentTransaction(target.dataset.transaction)) return cannotDelete();
     modal = ["advanceHistory", "groupPaymentHistory", "paymentHistory"].includes(nextModal?.type) ? nextModal : null;
     saveState();
     showToast("Payment reversed. Audit history retained.");
     return true;
   }
   if (deleteType === "active-payment-transaction") {
-    if (!deleteActivePaymentTransaction(target.dataset.transaction)) return false;
+    if (!deleteActivePaymentTransaction(target.dataset.transaction)) return cannotDelete();
     modal = ["advanceHistory", "groupPaymentHistory", "paymentHistory"].includes(nextModal?.type) ? nextModal : null;
     saveState();
     showToast("Payment permanently deleted. Its financial effect was undone.");
     return true;
   }
   if (deleteType === "reversed-payment-transaction") {
-    if (!deleteReversedPaymentTransaction(target.dataset.transaction)) return false;
+    if (!deleteReversedPaymentTransaction(target.dataset.transaction)) return cannotDelete();
     modal = ["advanceHistory", "groupPaymentHistory", "paymentHistory"].includes(nextModal?.type) ? nextModal : null;
     saveState();
     showToast("Reversed record permanently deleted. Balances were not changed.");
@@ -965,11 +961,11 @@ function executeConfirmedDelete(target) {
   if (deleteType === "payment-history") {
     const playerId = target.dataset.player;
     const historyType = target.dataset.historyType;
-    if (!playerId || !historyType) return false;
+    if (!playerId || !historyType) return cannotDelete();
     if (historyType === "session") {
       const session = getSession(target.dataset.session);
       const payment = session?.payments?.[playerId];
-      if (!session || !payment) return false;
+      if (!session || !payment) return cannotDelete();
       if (paymentHasActiveTransactionAllocation(session.id, playerId)) {
         modal = { type: "paymentHistory", playerId };
         showToast("Reverse the receipt in Transactions instead.");
@@ -989,7 +985,7 @@ function executeConfirmedDelete(target) {
     } else if (historyType === "activity") {
       const activity = state.activities.find((item) => item.id === target.dataset.activity);
       const share = activity?.shares?.[playerId];
-      if (!activity || !share) return false;
+      if (!activity || !share) return cannotDelete();
       if (activityShareHasActiveTransactionAllocation(activity.id, playerId)) {
         modal = { type: "paymentHistory", playerId };
         showToast("Reverse the receipt in Transactions instead.");
@@ -1000,17 +996,18 @@ function executeConfirmedDelete(target) {
       share.status = "Pending";
       recordActivityPaymentAdjustment(activity, share, previous, "history-reversal");
     } else if (historyType === "credit") {
+      modal = nextModal;
       showToast("Reverse the payment transaction that created this Credit.");
       return false;
     } else {
-      return false;
+      return cannotDelete();
     }
     modal = { type: "paymentHistory", playerId };
     saveState();
     showToast("Payment reversed. Audit history retained.");
     return true;
   }
-  return false;
+  return cannotDelete();
 }
 
 function playerLedger(playerId) {
