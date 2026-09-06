@@ -214,7 +214,7 @@ function renderWeeklyPlayersPanel(session) {
   const responses = [...(session.responses || [])].sort((a, b) => Number(a.voteOrder) - Number(b.voteOrder));
   const addedIds = new Set(responses.map((response) => response.playerId));
   const manuallyConfirmedIds = new Set(manualConfirmedPlayerIds(session));
-  const availablePlayers = state.players.filter((player) => player.active !== false && !addedIds.has(player.id) && !manuallyConfirmedIds.has(player.id));
+  const availablePlayers = state.players.filter((player) => playerIsSelectable(player) && !addedIds.has(player.id) && !manuallyConfirmedIds.has(player.id));
   const nextVoteOrder = responses.length ? Math.max(...responses.map((item) => Number(item.voteOrder))) + 1 : 1;
   const stats = sessionStats(session);
   return `

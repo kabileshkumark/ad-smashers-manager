@@ -844,10 +844,23 @@ function uniqueIds(ids) {
   return [...new Set((ids || []).filter(Boolean))];
 }
 
-function activePlayersAlphabetical() {
+function playerIsSelectable(player) {
+  return Boolean(player && player.active !== false && !player.archivedAt);
+}
+
+function ledgerPlayersAlphabetical() {
   return state.players
     .filter((player) => player.active !== false)
     .sort((a, b) => (a.name || a.displayName || "").localeCompare(b.name || b.displayName || "", undefined, { sensitivity: "base" }));
+}
+
+function activePlayersAlphabetical() {
+  return ledgerPlayersAlphabetical().filter(playerIsSelectable);
+}
+
+function selectablePlayersIncluding(playerIds = []) {
+  const retainedIds = new Set(playerIds);
+  return ledgerPlayersAlphabetical().filter((player) => playerIsSelectable(player) || retainedIds.has(player.id));
 }
 
 function playerAttendanceCount(playerId) {

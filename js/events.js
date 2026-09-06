@@ -528,6 +528,8 @@ function handleClick(event) {
   }
   if (action === "open-activity-players") {
     captureActivityDraft(actionTarget.closest('form[data-form="activity"]'));
+    clearKeyboardFocusScrollTimers();
+    document.activeElement?.blur?.();
     modal = { type: "activityPlayers" };
     render();
     return;
@@ -634,8 +636,18 @@ function handleClick(event) {
         deleteType: "player",
         playerId: player.id,
         title: "Delete Player",
-        message: `Delete ${player.name || player.displayName || "this player"}? Their future payment tracking and activity splits will be removed.`
+        message: `Remove ${player.name || player.displayName || "this player"} from active lists? Due, Advance and Credit must be settled. Past sessions, activities and payment-group history will be preserved.`
       });
+    }
+    return;
+  }
+  if (action === "restore-player") {
+    const player = getPlayer(actionTarget.dataset.player);
+    if (player?.archivedAt) {
+      delete player.archivedAt;
+      saveState();
+      render();
+      showToast("Player restored to active lists.");
     }
     return;
   }
@@ -703,19 +715,23 @@ function handleClick(event) {
     render();
     return;
   }
-  if (action === "activity-add-player") {
+  if (action === "activity-toggle-player") {
     const playerId = actionTarget.dataset.player;
-    if (playerId && !activityDraft.playerIds.includes(playerId)) {
+    if (!getPlayer(playerId)) return;
+    const savedActivity = state.activities.find((activity) => activity.id === activityDraft.id);
+    if (activityDraft.playerIds.includes(playerId)) {
+      activityDraft.playerIds = activityDraft.playerIds.filter((id) => id !== playerId);
+    } else if (playerIsSelectable(getPlayer(playerId)) || savedActivity?.playerIds.includes(playerId)) {
       activityDraft.playerIds.push(playerId);
-      syncActivityDraftSplitValues(activityDraft);
     }
-    render();
+    syncActivityDraftSplitValues(activityDraft);
+    updateActivityPlayerSelection();
     return;
   }
   if (action === "activity-remove-player") {
     activityDraft.playerIds = activityDraft.playerIds.filter((id) => id !== actionTarget.dataset.player);
     syncActivityDraftSplitValues(activityDraft);
-    render();
+    updateActivityPlayerSelection();
     return;
   }
   if (action === "activity-add-contribution") {

@@ -103,7 +103,7 @@ function buildDashboardData() {
   const nextSummary = nextSession ? dashboardSessionSummary(nextSession) : null;
   const paymentTotals = dashboardPaymentTotals(pastRangeSessions);
   const activityTotals = dashboardActivityTotals(rangeActivities);
-  const activePlayers = activePlayersAlphabetical();
+  const activePlayers = ledgerPlayersAlphabetical();
   const advanceTotal = dashboardMoney(activePlayers.reduce((total, player) => total + playerRemainingAdvance(player.id), 0));
   const creditTotal = dashboardMoney(activePlayers.reduce((total, player) => total + playerRemainingCredit(player.id), 0));
   const cashCollected = dashboardMoney(paymentTotals.cashApplied + activityTotals.cashApplied);
@@ -324,7 +324,7 @@ function dashboardFinanceSnapshot(sessions, activities = []) {
     .filter((row) => row.amount > 0)
     .sort((a, b) => dashboardDateTime(b.session.date) - dashboardDateTime(a.session.date));
   const playerMap = new Map();
-  activePlayersAlphabetical()
+  ledgerPlayersAlphabetical()
     .forEach((player) => {
       playerMap.set(player.id, {
         id: player.id,
@@ -444,7 +444,7 @@ function dashboardAttendanceLeaders(sessions) {
       counts.set(playerId, Number(counts.get(playerId) || 0) + 1);
     });
   });
-  return activePlayersAlphabetical()
+  return ledgerPlayersAlphabetical()
     .map((player) => ({
       player,
       count: Number(counts.get(player.id) || 0),
@@ -820,7 +820,7 @@ function renderDashboardSessionRow(session) {
 
 function renderSetupDashboard() {
   const courtsReady = state.courts.filter((court) => court.active !== false).length;
-  const playersReady = state.players.filter((player) => player.active !== false).length;
+  const playersReady = activePlayersAlphabetical().length;
   const groupsReady = settingsGroups().filter((group) => group.url).length;
   return `
     <section class="page">

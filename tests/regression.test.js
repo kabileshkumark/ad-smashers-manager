@@ -376,8 +376,8 @@ const TEST_STRUCTURED_COLLECTIONS = [
   { stateKey: "groups", collectionId: "groups", includeItem: isTestSettingsGroup },
   { stateKey: "groups", collectionId: "archivedGroups", includeItem: (item) => !isTestSettingsGroup(item) },
   { stateKey: "courts", collectionId: "courts" },
-  { stateKey: "players", collectionId: "players", includeItem: (item) => item?.active !== false },
-  { stateKey: "players", collectionId: "archivedPlayers", includeItem: (item) => item?.active === false },
+  { stateKey: "players", collectionId: "players", includeItem: (item) => item?.active !== false && !item?.archivedAt },
+  { stateKey: "players", collectionId: "archivedPlayers", includeItem: (item) => item?.active === false || Boolean(item?.archivedAt) },
   { stateKey: "sessions", collectionId: "sessions" },
   { stateKey: "activities", collectionId: "activities" },
   { stateKey: "paymentGroups", collectionId: "paymentGroups", includeItem: (item) => item?.active !== false },
@@ -5141,7 +5141,7 @@ test("recorded session payments still lock financial basis changes", () => {
   assert.equal(run(context, 'state.sessions[0].perPersonAmount'), 20);
 });
 
-test("activity group-Credit coverage prevents deleting the covered member", () => {
+test("settled group-Credit member can be removed without losing historical coverage", () => {
   const context = createAppContext();
   setAppState(
     context,
@@ -5173,8 +5173,12 @@ test("activity group-Credit coverage prevents deleting the covered member", () =
   assert.equal(run(context, 'activityPlayerHasActiveFinancialState(state.activities[0], "member")'), true);
   assert.equal(run(context, 'playerHasFinancialHistory("member")'), true);
   context.__deleteTarget = { dataset: { deleteType: "player", player: "member" } };
-  assert.equal(run(context, 'executeConfirmedDelete(__deleteTarget)'), false);
+  const before = jsonValue(context, "({activities: state.activities, groups: state.paymentGroups, advances: state.advances})");
+  assert.equal(run(context, 'executeConfirmedDelete(__deleteTarget)'), true);
   assert.equal(run(context, 'getPlayer("member").active'), true);
+  assert.equal(run(context, 'playerIsSelectable(getPlayer("member"))'), false);
+  assert.equal(run(context, 'playerBalance("member")'), 0);
+  assert.deepEqual(jsonValue(context, "({activities: state.activities, groups: state.paymentGroups, advances: state.advances})"), before);
 
   run(context, 'getPaymentGroup("activity-credit-group").active = false');
   assert.equal(run(context, 'activityPlayerHasActiveFinancialState(state.activities[0], "member")'), false);
@@ -6104,6 +6108,166 @@ test("activity field focus cancels stale mobile keyboard scrolling", async () =>
   assert.equal(context.__activityFocusScrolls.filter((entry) => entry.field === "first").length, 0);
   assert.equal(context.__activityFocusScrolls.filter((entry) => entry.field === "second").length, 3);
   assert.ok(context.__activityFocusScrolls.every((entry) => entry.options.behavior === "auto"));
+});
+
+function settledPlayerTestContext() {
+  const context = createAppContext();
+  setAppState(context, baseFixture({
+    players: [player("payer", "Payer"), player("member", "Member")],
+    sessions: [baseSession({responses: ["payer", "member"].map((id, index) => ({
+      id: `response-${id}`, playerId: id, voteOrder: index + 1,
+      attendanceChoice: "in", guestCount: 0, racketNeeded: false, rawOptions: ["I'm in"]
+    }))})],
+    paymentGroups: [{id:"group", name:"Group", payerId:"payer", playerIds:["payer", "member"], active:true}]
+  }));
+  run(context, 'showToast = () => {}; saveState = () => {};');
+  context.__archiveMember = {dataset:{deleteType:"player", player:"member"}};
+  context.__archivePayer = {dataset:{deleteType:"player", player:"payer"}};
+  return context;
+}
+
+test("settled member removal is independent of the other group member's due", () => {
+  const context = settledPlayerTestContext();
+  run(context, 'applyPlayerPayment("member", 20)');
+  assert.equal(run(context, 'playerBalance("payer")'), 20);
+  const before = jsonValue(context, '({sessions: state.sessions, groups: state.paymentGroups, receipts: state.paymentTransactions})');
+  assert.equal(run(context, 'executeConfirmedDelete(__archiveMember)'), true);
+  assert.equal(run(context, 'playerBalance("member")'), 0);
+  assert.equal(run(context, 'playerBalance("payer")'), 20);
+  assert.deepEqual(jsonValue(context, '({sessions: state.sessions, groups: state.paymentGroups, receipts: state.paymentTransactions})'), before);
+  assert.equal(run(context, 'activePlayersAlphabetical().some(p => p.id === "member")'), false);
+});
+
+test("removing a fully consumed group Advance payer retains all coverage and receipts", () => {
+  const context = settledPlayerTestContext();
+  run(context, 'recordPlayerAdvance("payer", 40)');
+  const before = jsonValue(context, '({coverage: [...ledgerCoverageSnapshot().players], sessions: state.sessions, advances: state.advances, receipts: state.paymentTransactions, groups: state.paymentGroups, dashboard: dashboardFinanceSnapshot(state.sessions, state.activities)})');
+  assert.equal(run(context, 'executeConfirmedDelete(__archivePayer)'), true);
+  assert.deepEqual(jsonValue(context, '({coverage: [...ledgerCoverageSnapshot().players], sessions: state.sessions, advances: state.advances, receipts: state.paymentTransactions, groups: state.paymentGroups, dashboard: dashboardFinanceSnapshot(state.sessions, state.activities)})'), before);
+  assert.equal(run(context, 'getPaymentGroup("group").payerId'), "payer");
+});
+
+test("player removal blocks Due and unspent Advance or Credit without mutation", () => {
+  for (const funding of ["due", "advance", "credit"]) {
+    const context = settledPlayerTestContext();
+    if (funding === "advance") run(context, 'recordPlayerAdvance("payer", 50)');
+    if (funding === "credit") run(context, 'applyGroupPayment({groupId:"group", paidById:"payer", playerIds:["payer","member"], amountPaid:50})');
+    const before = jsonValue(context, 'state');
+    assert.equal(run(context, 'executeConfirmedDelete(__archivePayer)'), false, funding);
+    assert.deepEqual(jsonValue(context, 'state'), before, funding);
+  }
+});
+
+test("removed player backup roundtrip retains shares group coverage and selectable status", () => {
+  const context = settledPlayerTestContext();
+  run(context, 'recordPlayerAdvance("payer", 40); state=restoreStateFromBackup(JSON.parse(JSON.stringify(state))); executeConfirmedDelete(__archiveMember)');
+  const before = jsonValue(context, '({coverage: [...ledgerCoverageSnapshot().players], receipts: state.paymentTransactions, groups:state.paymentGroups, payments:state.sessions[0].payments})');
+  run(context, 'state = restoreStateFromBackup(JSON.parse(JSON.stringify(state)))');
+  assert.equal(run(context, 'playerIsSelectable(getPlayer("member"))'), false);
+  assert.deepEqual(jsonValue(context, '({coverage: [...ledgerCoverageSnapshot().players], receipts: state.paymentTransactions, groups:state.paymentGroups, payments:state.sessions[0].payments})'), before);
+  assert.match(run(context, 'renderPlayers()'), /Restore Member/);
+  assert.doesNotMatch(run(context, 'renderSessionPlayersModal(state.sessions[0].id)'), /data-action="add-session-player"[^>]*data-player="member"/);
+});
+
+test("reversing a removed player's payment reopens a visible balance and permits restoration", () => {
+  const context = settledPlayerTestContext();
+  run(context, 'applyPlayerPayment("member", 20); executeConfirmedDelete(__archiveMember)');
+  const transactionId = run(context, 'state.paymentTransactions[0].id');
+  context.__transactionId = transactionId;
+  run(context, 'reversePaymentTransaction(__transactionId)');
+  assert.equal(run(context, 'playerBalance("member")'), 20);
+  assert.match(run(context, 'withLedgerCoverageSnapshotCache(() => renderPayments())'), /Payment summary for Member/);
+  assert.match(run(context, 'withLedgerCoverageSnapshotCache(() => renderPlayers())'), /Settlement reopened/);
+  run(context, 'render = () => {};');
+  context.__restoreTarget = {dataset:{action:"restore-player", player:"member"}};
+  run(context, 'handleClick({target:{matches:()=>false,closest:selector=>selector==="[data-action]"?__restoreTarget:null}})');
+  assert.equal(run(context, 'playerIsSelectable(getPlayer("member"))'), true);
+  assert.equal(run(context, 'playerBalance("member")'), 20);
+});
+
+test("archived activity participants and payers stay available when editing their historical activity", () => {
+  const context = createAppContext();
+  setAppState(context, baseFixture({
+    settings:{organizerPlayerId:"owner"}, players:[player("owner","Owner"), player("member","Member")],
+    activities:[{id:"dinner",name:"Dinner",date:isoDateFromToday(-2),totalPaid:40,paidById:"member",settlementOwnerId:"owner",playerIds:["owner","member"],contributions:[{playerId:"member",amount:40}],splitMode:"equal"}]
+  }));
+  run(context, 'getPlayer("member").archivedAt = new Date().toISOString(); activityDraft = {...createActivityDraft(), ...state.activities[0]}');
+  const before = jsonValue(context, 'state.activities[0]');
+  assert.match(run(context, 'renderActivityModal()'), /value="member"\s+selected/);
+  run(context, 'state = restoreStateFromBackup(JSON.parse(JSON.stringify(state)))');
+  assert.deepEqual(jsonValue(context, 'state.activities[0]'), before);
+  run(context, 'activityDraft = createActivityDraft()');
+  assert.doesNotMatch(run(context, 'renderActivityModal()'), /value="member"/);
+  assert.doesNotMatch(run(context, 'renderActivityPlayersModal()'), /data-player="member"/);
+});
+
+test("archiving a settled organizer preserves historical covered charges", () => {
+  const context = settledPlayerTestContext();
+  run(context, 'state.settings.organizerPlayerId="member"; state.sessions[0].organizerPlayerId="member"; syncSessionPayments(state.sessions[0])');
+  assert.equal(run(context, 'playerSessionRoleCoveredAmount("member")'), 20);
+  assert.equal(run(context, 'executeConfirmedDelete(__archiveMember)'), true);
+  assert.equal(run(context, 'state.settings.organizerPlayerId'), "");
+  assert.equal(run(context, 'state.sessions[0].organizerPlayerId'), "member");
+  assert.equal(run(context, 'playerSessionRoleCoveredAmount("member")'), 20);
+  assert.equal(run(context, 'playerBalance("member")'), 0);
+});
+
+test("removed player structured cloud save and reload retain identity and historical group coverage", async () => {
+  const context = settledPlayerTestContext();
+  run(context, 'recordPlayerAdvance("payer",40); executeConfirmedDelete(__archiveMember)');
+  let writes = [];
+  context.fetch = async (url, request = {}) => {
+    if (url.includes('/auditLogs?')) return jsonResponse(200, structuredAuditLogsList([]));
+    writes = JSON.parse(request.body).writes;
+    return jsonResponse(200, {writeResults:[{updateTime:"2026-09-06T04:00:00.000000Z"}]});
+  };
+  await run(context, 'saveCloudState(state)');
+  assert.ok(writes.some(write=>write.update?.name.endsWith('/archivedPlayers/member')));
+  assert.ok(!writes.some(write=>write.update?.name.endsWith('/players/member')));
+  const saved = jsonValue(context, 'state');
+  const loaded = createAppContext();
+  loaded.fetch = structuredFetchForState(saved);
+  await run(loaded, 'loadCloudState().then(value => {state=value})');
+  assert.equal(run(loaded, 'getPlayer("member").archivedAt'), saved.players.find(p=>p.id==="member").archivedAt);
+  assert.equal(run(loaded, 'playerIsSelectable(getPlayer("member"))'), false);
+  assert.equal(run(loaded, 'playerBalance("member")'), 0);
+  assert.equal(run(loaded, 'playerRemainingAdvance("payer")'), 0);
+  assert.deepEqual(jsonValue(loaded, 'getPaymentGroup("group").playerIds'), ["payer","member"]);
+});
+
+test("activity selection updates exact ids in place without page render or scroll replacement", () => {
+  const context = createAppContext();
+  setAppState(context, baseFixture({players:[player("a","Alpha"),player("b","Beta"),player("c","Charlie")]}));
+  run(context, 'activityDraft=createActivityDraft(); render=()=>{throw new Error("Unexpected full page redraw")};');
+  const rows = ["a","b","c"].map(id=>({dataset:{player:id},setAttribute(name,value){this[name]=value;}}));
+  const count = {textContent:""};
+  const list = {scrollTop:50,innerHTML:""};
+  const picker = {querySelectorAll:()=>rows,querySelector:selector=>selector.includes("selected-count")?count:list};
+  context.document.querySelector = selector => selector.includes("activity-players-modal-title") ? picker : null;
+  for (const id of ["c","a","c","b"]) {
+    context.__tap = {dataset:{action:"activity-toggle-player",player:id}};
+    run(context, 'handleClick({target:{matches:()=>false,closest:selector=>selector==="[data-action]"?__tap:null}})');
+  }
+  assert.deepEqual(jsonValue(context, 'activityDraft.playerIds'), ["a","b"]);
+  assert.deepEqual(rows.map(row=>row["aria-pressed"]), ["true","true","false"]);
+  assert.equal(count.textContent, "2 selected");
+  assert.equal(list.scrollTop, 50);
+  assert.match(list.innerHTML, /1\. Alpha/);
+  assert.match(list.innerHTML, /2\. Beta/);
+  const html = run(context, 'renderActivityPlayersModal()');
+  assert.equal((html.match(/data-action="activity-toggle-player"/g)||[]).length, 3);
+});
+
+test("native activity selectors do not schedule keyboard-driven scrolling", () => {
+  const context = createAppContext();
+  for (const name of ["MODAL_TEXT_CONTROL_SELECTOR", "PAGE_TEXT_CONTROL_SELECTOR"]) {
+    const selector = run(context, name);
+    assert.doesNotMatch(selector, /(?:modal-card|main-content) select/);
+    for (const type of ["radio","checkbox","date","time","file","range"]) assert.ok(selector.includes(`:not([type='${type}'])`));
+  }
+  context.__nativeControl = {matches:()=>false};
+  run(context, 'handleKeyboardControlFocusIn({target:__nativeControl})');
+  assert.equal(run(context, 'keyboardFocusScrollTimers.size'), 0);
 });
 
 test("app shell version is consistent with the configured technical build", () => {

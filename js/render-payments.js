@@ -68,9 +68,10 @@ function renderPaymentsSearch(value) {
 
 function renderPayments() {
   const activePlayers = activePlayersAlphabetical();
-  const balancePlayers = balancePlayersOrder(activePlayers);
-  const advancePlayers = advancePlayersOrder(activePlayers);
-  const totalOwed = activePlayers.reduce((total, player) => total + playerBalance(player.id), 0);
+  const financePlayers = ledgerPlayersAlphabetical();
+  const balancePlayers = balancePlayersOrder(financePlayers.filter((player) => playerIsSelectable(player) || playerHasUnsettledFinances(player.id)));
+  const advancePlayers = advancePlayersOrder(financePlayers);
+  const totalOwed = financePlayers.reduce((total, player) => total + playerBalance(player.id), 0);
   const activities = [...(state.activities || [])].sort((a, b) => `${b.date}${b.name}`.localeCompare(`${a.date}${a.name}`));
   const shuttleActivities = activities.filter((activity) => activityIsShuttle(activity));
   const sharedActivities = activities.filter((activity) => !activityIsShuttle(activity));
@@ -517,7 +518,7 @@ function renderGroupPaymentHistoryRow(transaction) {
 }
 
 function renderActivityModal() {
-  const players = activePlayersAlphabetical();
+  const players = selectablePlayersIncluding([...activityDraft.playerIds, ...(activityDraft.contributions || []).map((item) => item.playerId)]);
   const isEditing = Boolean(activityDraft.id);
   const ownerId = isEditing
     ? activitySettlementOwnerId((state.activities || []).find((activity) => activity.id === activityDraft.id))
@@ -684,7 +685,7 @@ function renderActivityPlayerPicker(players) {
 }
 
 function renderGroupPaymentModal() {
-  const players = activePlayersAlphabetical();
+  const players = selectablePlayersIncluding([...groupPaymentDraft.playerIds, groupPaymentDraft.paidById]);
   const selectedPlayers = groupPaymentDraft.playerIds.map((id) => getPlayer(id)).filter((player) => player && player.active !== false);
   const group = groupPaymentDraft.groupId ? getPaymentGroup(groupPaymentDraft.groupId) : null;
   const amountValue = groupPaymentDraft.amountPaid !== "" ? groupPaymentDraft.amountPaid : group ? String(paymentGroupBalance(group)) : "";
@@ -725,7 +726,7 @@ function renderGroupPaymentModal() {
 }
 
 function renderPaymentGroupModal() {
-  const players = activePlayersAlphabetical();
+  const players = selectablePlayersIncluding([...paymentGroupDraft.playerIds, paymentGroupDraft.payerId]);
   const selectedPlayers = paymentGroupDraft.playerIds.map((id) => getPlayer(id)).filter((player) => player && player.active !== false);
   const selectedGuests = normalizePaymentGroupGuests(paymentGroupDraft.guests || []);
   const isEditing = Boolean(paymentGroupDraft.id);

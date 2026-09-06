@@ -71,8 +71,28 @@ function renderPlayers() {
       <div class="grid two">
         ${playersWithRolesFirst().map((player) => renderPlayerCard(player)).join("")}
       </div>
+      ${renderArchivedPlayers()}
     </section>
   `;
+}
+
+function renderArchivedPlayers() {
+  const players = ledgerPlayersAlphabetical().filter((player) => player.archivedAt);
+  if (!players.length) return "";
+  return `<details class="archived-players">
+    <summary>Removed players (${players.length})</summary>
+    <div class="grid two">${players.map((player) => `
+      <article class="row-card">
+        <div class="row-main">
+          <div><h3 class="row-title">${escapeHtml(player.name || player.displayName)}</h3>
+          <span class="badge ${playerHasUnsettledFinances(player.id) ? "gold" : "gray"}">${playerHasUnsettledFinances(player.id) ? "Settlement reopened" : "Archived"}</span></div>
+          <div class="toolbar icon-toolbar">
+            <button class="btn icon-only" type="button" data-action="open-payment-history" data-player="${escapeAttr(player.id)}" aria-label="Payment history for ${escapeAttr(player.name || player.displayName)}" title="Payment history">${icon("history")}</button>
+            <button class="btn icon-only" type="button" data-action="restore-player" data-player="${escapeAttr(player.id)}" aria-label="Restore ${escapeAttr(player.name || player.displayName)}" title="Restore player">${icon("refresh")}</button>
+          </div>
+        </div>
+      </article>`).join("")}</div>
+  </details>`;
 }
 
 function renderPlayerRoleButton(role) {

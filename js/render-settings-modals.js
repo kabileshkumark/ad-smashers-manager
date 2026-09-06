@@ -444,7 +444,8 @@ function renderPartialPaymentModal(sessionId = "", playerId = "") {
 function renderActivityPlayersModal() {
   const selectedIds = new Set(activityDraft.playerIds);
   const selectedPlayers = activityDraft.playerIds.map((id) => getPlayer(id)).filter((player) => player && player.active !== false);
-  const availablePlayers = activePlayersAlphabetical().filter((player) => !selectedIds.has(player.id));
+  const savedPlayerIds = state.activities.find((activity) => activity.id === activityDraft.id)?.playerIds || [];
+  const availablePlayers = selectablePlayersIncluding([...activityDraft.playerIds, ...savedPlayerIds]);
   return `
     <div class="modal-backdrop" data-modal-backdrop>
       <div class="modal-card session-players-modal" role="dialog" aria-modal="true" aria-labelledby="activity-players-modal-title">
@@ -460,7 +461,7 @@ function renderActivityPlayersModal() {
             <div class="section-heading compact">
               <div>
                 <h3>Available Players</h3>
-                <p>${availablePlayers.length} available</p>
+                <p>${availablePlayers.length} players</p>
               </div>
             </div>
             <div class="quick-player-list" data-modal-scroll="activity-available-players">
@@ -469,14 +470,15 @@ function renderActivityPlayersModal() {
                   ? availablePlayers
                       .map(
                         (player) => `
-                          <button class="quick-player-option" type="button" data-action="activity-add-player" data-player="${escapeAttr(player.id)}">
+                          <button class="quick-player-option activity-player-option" type="button" data-action="activity-toggle-player" data-player="${escapeAttr(player.id)}" aria-pressed="${selectedIds.has(player.id)}">
                             <span>${escapeHtml(player.name || player.displayName || "Player")}</span>
                             <small>${escapeHtml(normalizeSkillLevel(player.skillLevel))}</small>
+                            <span class="activity-selection-mark" aria-hidden="true">${icon("check")}</span>
                           </button>
                         `
                       )
                       .join("")
-                  : `<div class="empty">All saved players are already selected.</div>`
+                  : `<div class="empty">No active players.</div>`
               }
             </div>
           </section>
@@ -484,30 +486,42 @@ function renderActivityPlayersModal() {
             <div class="section-heading compact">
               <div>
                 <h3>Split List</h3>
-                <p>${selectedPlayers.length} selected</p>
+                <p data-activity-selected-count aria-live="polite">${selectedPlayers.length} selected</p>
               </div>
             </div>
             <div class="quick-vote-list" data-modal-scroll="activity-split-list">
-              ${
-                selectedPlayers.length
-                  ? selectedPlayers
-                      .map(
-                        (player, index) => `
-                          <div class="quick-vote-item">
-                            <span>${index + 1}. ${escapeHtml(player.name || player.displayName || "Player")}</span>
-                            <button class="btn icon-only danger" type="button" data-action="activity-remove-player" data-player="${escapeAttr(player.id)}" aria-label="Remove ${escapeAttr(player.name || player.displayName || "Player")}" title="Remove">${icon("trash")}</button>
-                          </div>
-                        `
-                      )
-                      .join("")
-                  : `<div class="empty">No players selected for this activity yet.</div>`
-              }
+              ${renderActivitySelectedPlayers(selectedPlayers)}
             </div>
           </section>
         </div>
       </div>
     </div>
   `;
+}
+
+function renderActivitySelectedPlayers(players) {
+  return players.length ? players.map((player, index) => `
+    <div class="quick-vote-item">
+      <span>${index + 1}. ${escapeHtml(player.name || player.displayName || "Player")}</span>
+      <button class="btn icon-only danger" type="button" data-action="activity-remove-player" data-player="${escapeAttr(player.id)}" aria-label="Remove ${escapeAttr(player.name || player.displayName || "Player")}" title="Remove">${icon("trash")}</button>
+    </div>
+  `).join("") : `<div class="empty">No players selected for this activity yet.</div>`;
+}
+
+function updateActivityPlayerSelection() {
+  const picker = document.querySelector('[aria-labelledby="activity-players-modal-title"]');
+  if (!picker) return;
+  const selectedIds = new Set(activityDraft.playerIds);
+  // Preserve the touched rows and their scroll container instead of rebuilding the page.
+  picker.querySelectorAll('[data-action="activity-toggle-player"]').forEach((button) => {
+    button.setAttribute("aria-pressed", String(selectedIds.has(button.dataset.player)));
+  });
+  const selectedPlayers = activityDraft.playerIds.map(getPlayer).filter(Boolean);
+  picker.querySelector("[data-activity-selected-count]").textContent = `${selectedPlayers.length} selected`;
+  const selectedList = picker.querySelector('[data-modal-scroll="activity-split-list"]');
+  const scrollTop = selectedList.scrollTop;
+  selectedList.innerHTML = renderActivitySelectedPlayers(selectedPlayers);
+  selectedList.scrollTop = scrollTop;
 }
 
 function renderPaymentPlayerPickerModal(kind = "groupPayment") {
@@ -631,7 +645,7 @@ function renderSessionPlayersModal(sessionId = "") {
   const addedIds = new Set(responses.map((response) => response.playerId));
   const manuallyConfirmedIds = new Set(manualConfirmedPlayerIds(session));
   const availablePlayers = state.players
-    .filter((player) => player.active !== false && !addedIds.has(player.id) && !manuallyConfirmedIds.has(player.id))
+    .filter((player) => playerIsSelectable(player) && !addedIds.has(player.id) && !manuallyConfirmedIds.has(player.id))
     .sort((a, b) => (a.name || a.displayName || "").localeCompare(b.name || b.displayName || ""));
   const selectedCount = sessionVoteParticipantCount(responses);
   const nextVoteOrder = selectedCount + 1;
@@ -750,7 +764,7 @@ function renderSessionAttendanceModal(sessionId = "") {
   const attendedPlayerIds = effectiveAttendedPlayerIds(session);
   const attendedSet = new Set(attendedPlayerIds);
   const availablePlayers = state.players
-    .filter((player) => player.active !== false && !attendedSet.has(player.id))
+    .filter((player) => playerIsSelectable(player) && !attendedSet.has(player.id))
     .sort((a, b) => (a.name || a.displayName || "").localeCompare(b.name || b.displayName || ""));
   return `
     <div class="modal-backdrop" data-modal-backdrop>
