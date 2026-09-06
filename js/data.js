@@ -576,8 +576,8 @@ function updateResponseVote(sessionId, responseId, attendanceChoice) {
   const session = getSession(sessionId);
   const response = session?.responses?.find((item) => item.id === responseId);
   if (!response) return;
-  if (typeof sessionPlayerHasActiveFinancialState === "function" && sessionPlayerHasActiveFinancialState(session, response.playerId)) {
-    showToast("Clear this player's active cash, Advance, or Credit coverage before changing their vote.");
+  if (typeof sessionPlayerHasRecordedFinancialState === "function" && sessionPlayerHasRecordedFinancialState(session, response.playerId)) {
+    showToast("Reverse this player's recorded session payment before changing their vote. Automatic Advance/Credit coverage recalculates.");
     render();
     return false;
   }
@@ -630,7 +630,7 @@ function addResponseGuest(session, responseId) {
   const response = session?.responses?.find((item) => item.id === responseId);
   const currentCount = Number(response?.guestCount || 0);
   if (!response) return false;
-  if (typeof sessionPlayerHasActiveFinancialState === "function" && sessionPlayerHasActiveFinancialState(session, response.playerId)) return false;
+  if (typeof sessionPlayerHasRecordedFinancialState === "function" && sessionPlayerHasRecordedFinancialState(session, response.playerId)) return false;
   const nextCount = currentCount + 1;
   setResponseGuestCount(response, nextCount);
   restoreResponseGuestAttendance(session, response.id, nextCount);
@@ -642,7 +642,7 @@ function addResponseGuest(session, responseId) {
 function removeResponseGuest(session, responseId) {
   const response = session?.responses?.find((item) => item.id === responseId);
   if (!response || Number(response.guestCount || 0) <= 0) return false;
-  if (typeof sessionPlayerHasActiveFinancialState === "function" && sessionPlayerHasActiveFinancialState(session, response.playerId)) return false;
+  if (typeof sessionPlayerHasRecordedFinancialState === "function" && sessionPlayerHasRecordedFinancialState(session, response.playerId)) return false;
   const nextCount = Number(response.guestCount || 0) - 1;
   setResponseGuestCount(response, nextCount);
   pruneRemovedGuestsForResponse(session, response.id, nextCount);
@@ -689,7 +689,7 @@ function setManualGuestCount(session, playerId, guestCount) {
   if (!session || !playerId) return false;
   const currentCount = manualGuestCount(session, playerId);
   const count = Math.max(0, Math.floor(Number(guestCount || 0)));
-  if (count !== currentCount && typeof sessionPlayerHasActiveFinancialState === "function" && sessionPlayerHasActiveFinancialState(session, playerId)) return false;
+  if (count !== currentCount && typeof sessionPlayerHasRecordedFinancialState === "function" && sessionPlayerHasRecordedFinancialState(session, playerId)) return false;
   const counts = ensureManualGuestCounts(session);
   if (count > 0) {
     counts[playerId] = count;
@@ -706,7 +706,7 @@ function clearManualGuestCount(session, playerId) {
 
 function addManualAttendanceGuest(session, playerId) {
   if (!session || !playerId) return false;
-  if (typeof sessionPlayerHasActiveFinancialState === "function" && sessionPlayerHasActiveFinancialState(session, playerId)) return false;
+  if (typeof sessionPlayerHasRecordedFinancialState === "function" && sessionPlayerHasRecordedFinancialState(session, playerId)) return false;
   if (!effectiveAttendedPlayerIds(session).includes(playerId)) {
     setManualAttendedPlayerIds(session, [...manualAttendedPlayerIds(session), playerId]);
   }

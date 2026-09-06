@@ -4902,7 +4902,7 @@ test("permanent transaction cleanup rejects active, migrated, and non-payment au
   assert.doesNotMatch(run(context, 'renderPlayerPaymentTransactionItem("payer", state.paymentTransactions[1])'), /delete-reversed-payment-transaction/);
 });
 
-test("derived payment-group Credit locks roster changes only while coverage is active", () => {
+test("derived payment-group Credit recalculates after roster changes", () => {
   const context = createAppContext();
   setAppState(
     context,
@@ -4937,14 +4937,134 @@ test("derived payment-group Credit locks roster changes only while coverage is a
   assert.equal(run(context, 'state.sessions[0].payments.member.amount'), 50);
   assert.equal(run(context, 'paymentCoverageApplied(state.sessions[0], state.sessions[0].payments.member)'), 40);
   assert.equal(run(context, 'updateSessionPerPersonAmount(state.sessions[0], 20)'), true);
-  assert.equal(run(context, 'removeResponseGuest(state.sessions[0], "credit-guard-response")'), false);
-  assert.equal(run(context, 'state.sessions[0].responses[0].guestCount'), 1);
-
-  run(context, 'getPaymentGroup("credit-group").active = false');
-  assert.equal(run(context, 'sessionPlayerHasActiveFinancialState(state.sessions[0], "member")'), false);
   assert.equal(run(context, 'removeResponseGuest(state.sessions[0], "credit-guard-response")'), true);
   assert.equal(run(context, 'state.sessions[0].responses[0].guestCount'), 0);
   assert.equal(run(context, 'state.sessions[0].payments.member.amount'), 20);
+  assert.equal(run(context, 'paymentCoverageApplied(state.sessions[0], state.sessions[0].payments.member)'), 20);
+  assert.equal(run(context, 'state.advances.payer'), 40);
+  assert.equal(run(context, 'addResponseGuest(state.sessions[0], "credit-guard-response")'), true);
+  assert.equal(run(context, 'paymentCoverageApplied(state.sessions[0], state.sessions[0].payments.member)'), 40);
+});
+
+for (const coverage of ["none", "credit", "advance", "group-credit", "group-advance"]) {
+  test(`attendance removals recalculate ${coverage} without losing receipts or restoring no-shows`, () => {
+    const context = createAppContext();
+    const grouped = coverage.startsWith("group-");
+    const ownerId = grouped ? "payer" : "member";
+    setAppState(context, baseFixture({
+      players: [player("payer", "Payer"), player("member", "Member")],
+      advances: coverage.endsWith("credit") ? { [ownerId]: 100 } : {},
+      paymentGroups: grouped ? [{ id: "group", name: "Group", payerId: "payer", playerIds: ["payer", "member"], active: true }] : [],
+      sessions: [baseSession({
+        responses: [{ id: "response", playerId: "member", voteOrder: 1, attendanceChoice: "in_plus_1", guestCount: 1 }],
+        manualAttendedPlayerIds: ["member"],
+        manualGuestCounts: { member: 1 }
+      })]
+    }));
+    run(context, 'showToast = () => {}; render = () => {}; saveState = () => {}');
+    if (coverage.endsWith("advance")) run(context, `recordPlayerAdvance("${ownerId}", 100)`);
+    setAppState(context, jsonValue(context, 'state'));
+    const receipts = jsonValue(context, 'state.paymentTransactions');
+    const poll = jsonValue(context, 'state.sessions[0].responses');
+    assert.equal(run(context, 'state.sessions[0].payments.member.amount'), 60);
+    assert.equal(run(context, 'paymentCoverageApplied(state.sessions[0], state.sessions[0].payments.member)'), coverage === "none" ? 0 : 60);
+
+    assert.equal(run(context, 'executeConfirmedDelete({dataset:{deleteType:"attendance-guest", session:"session-1", player:"member", guestKey:"response-guest-1"}})'), true);
+    assert.equal(run(context, 'state.sessions[0].payments.member.amount'), 40);
+    assert.equal(run(context, 'paymentCoverageApplied(state.sessions[0], state.sessions[0].payments.member)'), coverage === "none" ? 0 : 40);
+    assert.equal(run(context, 'addManualAttendanceGuest(state.sessions[0], "member")'), true);
+    assert.equal(run(context, 'state.sessions[0].payments.member.amount'), 60);
+    assert.equal(run(context, 'executeConfirmedDelete({dataset:{deleteType:"attendance", session:"session-1", player:"member"}})'), true);
+    assert.equal(run(context, 'effectiveAttendedEntries(state.sessions[0]).length'), 0);
+    assert.equal(run(context, 'Boolean(state.sessions[0].payments.member)'), false);
+    assert.equal(run(context, 'manualGuestCount(state.sessions[0], "member")'), 0);
+    if (coverage !== "none") {
+      const remainingField = coverage.endsWith("advance") ? "remainingAdvance" : "remainingCredit";
+      assert.equal(run(context, `ledgerCoverageSnapshot().players.get("${ownerId}").${remainingField}`), 100);
+      if (grouped) assert.equal(run(context, `ledgerCoverageSnapshot().players.get("member").${remainingField}`), 0);
+    }
+    assert.deepEqual(jsonValue(context, 'state.sessions[0].responses'), poll);
+    assert.deepEqual(jsonValue(context, 'state.paymentTransactions'), receipts);
+    setAppState(context, jsonValue(context, 'state'));
+    assert.equal(run(context, 'effectiveAttendedEntries(state.sessions[0]).length'), 0);
+    assert.equal(run(context, 'Boolean(state.sessions[0].payments.member)'), false);
+
+    assert.equal(run(context, 'addManualAttendedPlayer(state.sessions[0], "member")'), true);
+    assert.equal(run(context, 'state.sessions[0].payments.member.amount'), 20);
+    assert.equal(run(context, 'paymentCoverageApplied(state.sessions[0], state.sessions[0].payments.member)'), coverage === "none" ? 0 : 20);
+    assert.deepEqual(jsonValue(context, 'state.paymentTransactions'), receipts);
+  });
+}
+
+test("removing an attendance-only player keeps automatic poll syncing", () => {
+  const context = createAppContext();
+  setAppState(context, baseFixture({
+    players: [player("manual", "Manual"), player("voter", "Voter")],
+    sessions: [baseSession({ manualAttendedPlayerIds: ["manual"] })]
+  }));
+  assert.equal(run(context, 'removeAttendedPlayer(state.sessions[0], "manual")'), true);
+  assert.equal(run(context, 'state.sessions[0].attendanceManual'), false);
+  run(context, 'state.sessions[0].responses.push({id:"vote", playerId:"voter", attendanceChoice:"in", voteOrder:1}); syncSessionPayments(state.sessions[0])');
+  assert.deepEqual(jsonValue(context, 'effectiveAttendedPlayerIds(state.sessions[0])'), ["voter"]);
+});
+
+test("all attendance and voter mutation paths preserve recorded cash until reversal", () => {
+  const context = createAppContext();
+  setAppState(context, baseFixture({
+    players: [player("member", "Member")],
+    sessions: [baseSession({
+      responses: [{ id: "response", playerId: "member", voteOrder: 1, attendanceChoice: "in_plus_1", guestCount: 1 }]
+    })]
+  }));
+  run(context, 'showToast = () => {}; render = () => {}; saveState = () => {}');
+  const transactionId = run(context, 'applyPlayerPayment("member", 40).transaction.id');
+  const before = jsonValue(context, 'state');
+  for (const deleteType of ["attendance", "attendance-guest", "response", "response-guest"]) {
+    context.__target = { dataset: { deleteType, session: "session-1", player: "member", response: "response", guestKey: "response-guest-1" } };
+    assert.equal(run(context, 'executeConfirmedDelete(__target)'), false, deleteType);
+    assert.deepEqual(jsonValue(context, 'state'), before, deleteType);
+  }
+  for (const mutation of [
+    'removeAttendedPlayer(state.sessions[0], "member")',
+    'addResponseGuest(state.sessions[0], "response")',
+    'removeResponseGuest(state.sessions[0], "response")',
+    'addManualAttendanceGuest(state.sessions[0], "member")',
+    'setManualGuestCount(state.sessions[0], "member", 1)',
+    'updateResponseVote("session-1", "response", "in")'
+  ]) {
+    assert.equal(run(context, mutation), false, mutation);
+    assert.deepEqual(jsonValue(context, 'state'), before, mutation);
+  }
+  run(context, `
+    __toasts = [];
+    showToast = message => __toasts.push(message);
+    modal = { type: "deleteConfirm", previousModal: { type: "sessionAttendance", sessionId: "session-1" } };
+    const target = { dataset: { action: "confirm-delete", deleteType: "attendance", session: "session-1", player: "member" } };
+    handleClick({ target: { matches: () => false, closest: selector => selector === "[data-action]" ? target : null } });
+  `);
+  assert.equal(jsonValue(context, '__toasts').length, 1);
+  assert.match(run(context, '__toasts[0]'), /Reverse this player's recorded session payment/);
+  assert.equal(run(context, 'modal.type'), "sessionAttendance");
+  assert.deepEqual(jsonValue(context, 'state'), before);
+  context.__transactionId = transactionId;
+  assert.equal(run(context, 'reversePaymentTransaction(__transactionId)'), true);
+  assert.equal(run(context, 'removeAttendedPlayer(state.sessions[0], "member")'), true);
+  assert.equal(run(context, 'effectiveAttendedEntries(state.sessions[0]).length'), 0);
+  assert.equal(run(context, 'state.paymentTransactions[0].status'), "reversed");
+});
+
+test("unknown delete targets give one fallback error without dismissing the previous view", () => {
+  const context = createAppContext();
+  run(context, `
+    __toasts = [];
+    render = () => {};
+    showToast = message => __toasts.push(message);
+    modal = { type: "deleteConfirm", previousModal: { type: "paymentHistory", playerId: "missing" } };
+    const target = { dataset: { action: "confirm-delete", deleteType: "payment-transaction", transaction: "missing" } };
+    handleClick({ target: { matches: () => false, closest: selector => selector === "[data-action]" ? target : null } });
+  `);
+  assert.deepEqual(jsonValue(context, '__toasts'), ["Could not delete."]);
+  assert.equal(run(context, 'modal.type'), "paymentHistory");
 });
 
 test("derived Advance coverage recalculates when a session financial basis changes", () => {
