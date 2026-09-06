@@ -3397,6 +3397,36 @@ body.is-scrolling-content .bottom-nav {
   font-weight: 800;
 }
 
+.activity-player-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 22px;
+  text-align: left;
+}
+
+.activity-selection-mark {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.activity-selection-mark .icon {
+  width: 16px;
+  height: 16px;
+  visibility: hidden;
+}
+
+.activity-player-option[aria-pressed="true"] .activity-selection-mark {
+  background: var(--teal-700);
+  color: white;
+}
+
+.activity-player-option[aria-pressed="true"] .icon {
+  visibility: visible;
+}
+
 .quick-vote-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 44px;

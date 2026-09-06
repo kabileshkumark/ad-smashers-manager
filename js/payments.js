@@ -737,6 +737,20 @@ function reconcileActivityFinancials(existingActivity, updatedActivity = null, s
   return { creditReturned };
 }
 
+function playerRemovalBalances(playerId) {
+  const summary = ledgerCoverageSnapshot().players.get(playerId);
+  return {
+    due: ledgerMoney(summary?.balance),
+    advance: ledgerMoney(summary?.remainingAdvance),
+    credit: ledgerMoney(summary?.remainingCredit),
+    reserved: ledgerMoney(playerUpcomingLinkedAdvance(playerId))
+  };
+}
+
+function playerHasUnsettledFinances(playerId) {
+  return Object.values(playerRemovalBalances(playerId)).some((amount) => amount > 0);
+}
+
 function playerHasFinancialHistory(playerId) {
   if (!playerId) return false;
   if (Number(state.advances?.[playerId] || 0) > 0) return true;
@@ -796,47 +810,27 @@ function executeConfirmedDelete(target) {
   if (deleteType === "player") {
     const player = getPlayer(target.dataset.player);
     if (!player) return cannotDelete();
-    if (playerHasFinancialHistory(player.id)) {
+    const balances = playerRemovalBalances(player.id);
+    if (Object.values(balances).some((amount) => amount > 0)) {
       modal = null;
-      showToast("This player has financial history and cannot be deleted.");
+      const pending = [
+        balances.due > 0 ? `Due ${currency(balances.due)}` : "",
+        balances.advance > 0 ? `Advance ${currency(balances.advance)}` : "",
+        balances.credit > 0 ? `Credit ${currency(balances.credit)}` : "",
+        balances.reserved > 0 ? `Reserved payment ${currency(balances.reserved)}` : ""
+      ].filter(Boolean).join(", ");
+      showToast(`Settle ${pending} before removing this player.`);
       return false;
     }
-    player.active = false;
+    // Directory removal must not change the ledger's attendance, shares or funding ownership.
+    player.archivedAt = new Date().toISOString();
     ["organizer", "coOrganizer"].forEach((role) => {
       const field = playerRoleConfig(role).field;
       if (state.settings?.[field] === player.id) state.settings[field] = "";
     });
-    state.sessions.forEach((item) => {
-      if (Array.isArray(item.attendedPlayerIds)) {
-        item.attendedPlayerIds = item.attendedPlayerIds.filter((id) => id !== player.id);
-      }
-      item.manualAttendedPlayerIds = uniqueIds(item.manualAttendedPlayerIds || []).filter((id) => id !== player.id);
-      clearManualGuestCount(item, player.id);
-      syncSessionPayments(item);
-    });
-    state.activities.forEach((activity) => {
-      activity.playerIds = activity.playerIds.filter((id) => id !== player.id);
-      activity.contributions = activityContributions(activity).filter((contribution) => contribution.playerId !== player.id);
-      activity.paidById = activity.contributions[0]?.playerId || "";
-      if (activity.splitValues) delete activity.splitValues[player.id];
-      syncActivityShares(activity);
-    });
-    state.paymentGroups = (state.paymentGroups || [])
-      .map((group) => {
-        const playerIds = (group.playerIds || []).filter((id) => id !== player.id);
-        return {
-          ...group,
-          payerId: group.payerId === player.id ? playerIds[0] || "" : group.payerId,
-          playerIds,
-          guests: normalizePaymentGroupGuests(group.guests || []).filter((guest) => guest.ownerPlayerId !== player.id),
-          active: group.active !== false && playerIds.length > 0
-        };
-      })
-      .filter((group) => group.active !== false);
-    clearPlayerAdvance(player.id);
     modal = null;
     saveState();
-    showToast("Player deleted.");
+    showToast("Player removed from active lists. History preserved.");
     return true;
   }
   if (deleteType === "response") {

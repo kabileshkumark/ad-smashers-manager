@@ -1,7 +1,7 @@
 const WHATSAPP_BUSINESS_ANDROID_PACKAGE = "com.whatsapp.w4b";
 const DEFAULT_APP_LOADING_MESSAGE = "Refreshing app...";
-const MODAL_TEXT_CONTROL_SELECTOR = ".modal-card input:not([type='hidden']), .modal-card select, .modal-card textarea";
-const PAGE_TEXT_CONTROL_SELECTOR = "#main-content input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='button']):not([type='submit']), #main-content select, #main-content textarea";
+const MODAL_TEXT_CONTROL_SELECTOR = ".modal-card input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='button']):not([type='submit']):not([type='date']):not([type='time']):not([type='color']), .modal-card textarea";
+const PAGE_TEXT_CONTROL_SELECTOR = "#main-content input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='button']):not([type='submit']):not([type='date']):not([type='time']):not([type='color']), #main-content textarea";
 let appHandoffOverlayTimer = null;
 let modalKeyboardFocusGuardsInstalled = false;
 let keyboardFocusScrollTimers = new Set();
@@ -431,9 +431,9 @@ function handleKeyboardControlFocusIn(event) {
   const modalTarget = modalTextControl(event.target);
   const pageTarget = pageTextControl(event.target);
   const target = modalTarget || pageTarget;
-  if (!target) return;
   clearKeyboardFocusScrollTimers();
   updateKeyboardControlFocusState(target);
+  if (!target) return;
   const scrollFocusedControl = modalTarget
     ? scrollFocusedModalControlIntoView
     : scrollFocusedPageControlIntoView;
