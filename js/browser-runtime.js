@@ -5,6 +5,7 @@ const PAGE_TEXT_CONTROL_SELECTOR = "#main-content input:not([type='hidden']):not
 let appHandoffOverlayTimer = null;
 let modalKeyboardFocusGuardsInstalled = false;
 let keyboardFocusScrollTimers = new Set();
+let keyboardFocusScrollSuppressed = false;
 
 function isAndroidRuntime() {
   return /Android/i.test(navigator.userAgent || "");
@@ -368,22 +369,55 @@ function clearKeyboardFocusScrollTimers() {
 }
 
 function scheduleKeyboardFocusScroll(control, callback, delay) {
+  if (keyboardFocusScrollSuppressed) return;
   const timerId = window.setTimeout(() => {
     keyboardFocusScrollTimers.delete(timerId);
-    if (document.activeElement !== control) return;
+    if (keyboardFocusScrollSuppressed || document.activeElement !== control || control.isConnected === false) return;
     callback();
   }, delay);
   keyboardFocusScrollTimers.add(timerId);
+}
+
+function yieldKeyboardScrollToUser() {
+  keyboardFocusScrollSuppressed = true;
+  clearKeyboardFocusScrollTimers();
+}
+
+function revealControlWithinScroller(target, scroller) {
+  const viewport = window.visualViewport;
+  const viewportHeight = Number(viewport?.height || window.innerHeight || document.documentElement?.clientHeight || 0);
+  const viewportTop = Number(viewport?.offsetTop || 0);
+  const containerRect = scroller.getBoundingClientRect?.();
+  const targetRect = target.getBoundingClientRect?.();
+  if (!viewportHeight || !containerRect || !targetRect) return;
+  const safeTop = Math.max(viewportTop, containerRect.top) + 12;
+  const safeBottom = Math.min(viewportTop + viewportHeight, containerRect.bottom) - 16;
+  if (safeBottom <= safeTop) return;
+  if (targetRect.top < safeTop && targetRect.bottom > safeBottom) return;
+  let delta = 0;
+  if (targetRect.bottom > safeBottom) {
+    delta = targetRect.bottom - safeBottom;
+  } else if (targetRect.top < safeTop) {
+    delta = targetRect.top - safeTop;
+  }
+  if (Math.abs(delta) < 1) return;
+  // Do not scroll ancestors or the document: Safari may be panning for its keyboard.
+  const top = Math.max(0, Number(scroller.scrollTop || 0) + delta);
+  if (typeof scroller.scrollTo === "function") {
+    scroller.scrollTo({ top, behavior: "auto" });
+  } else {
+    scroller.scrollTop = top;
+  }
 }
 
 function scrollFocusedModalControlIntoView(control = document.activeElement, delay = 80) {
   const target = modalTextControl(control);
   const modalCard = target?.closest?.(".modal-card");
   if (!target || !modalCard) return false;
-  const scrollTarget = target.closest(".field, .activity-player-control, .poll-vote-guest-name-field, .quick-vote-name-field, .payment-group-guest-item") || target;
+  const scroller = target.closest("[data-modal-scroll]") || modalCard;
   scheduleKeyboardFocusScroll(target, () => {
     refreshVisualViewportModalVars();
-    scrollTarget.scrollIntoView?.({ block: "center", inline: "nearest", behavior: "auto" });
+    revealControlWithinScroller(target, scroller);
   }, delay);
   return true;
 }
@@ -392,37 +426,9 @@ function scrollFocusedPageControlIntoView(control = document.activeElement, dela
   const target = pageTextControl(control);
   const main = target?.closest?.("#main-content");
   if (!target || !main) return false;
-  const scrollTarget = target.closest(".field, .search-field, .activity-player-control") || target;
   scheduleKeyboardFocusScroll(target, () => {
     refreshVisualViewportModalVars();
-    const viewport = window.visualViewport;
-    const viewportHeight = Math.max(0, Number(viewport?.height || window.innerHeight || document.documentElement?.clientHeight || 0));
-    const viewportTop = Math.max(0, Number(viewport?.offsetTop || 0));
-    const mainRect = main.getBoundingClientRect?.();
-    const targetRect = scrollTarget.getBoundingClientRect?.();
-    if (!viewportHeight || !mainRect || !targetRect) {
-      scrollTarget.scrollIntoView?.({ block: "nearest", inline: "nearest", behavior: "auto" });
-      return;
-    }
-    const safeTop = Math.max(viewportTop + 12, Number(mainRect.top || 0) + 12);
-    const safeBottom = Math.min(
-      viewportTop + viewportHeight - 16,
-      Number(mainRect.bottom || (viewportTop + viewportHeight)) - 16
-    );
-    if (safeBottom <= safeTop) return;
-    let delta = 0;
-    if (Number(targetRect.bottom || 0) > safeBottom) {
-      delta = Number(targetRect.bottom || 0) - safeBottom;
-    } else if (Number(targetRect.top || 0) < safeTop) {
-      delta = Number(targetRect.top || 0) - safeTop;
-    }
-    if (Math.abs(delta) < 1) return;
-    const nextTop = Math.max(0, Number(main.scrollTop || 0) + delta);
-    if (typeof main.scrollTo === "function") {
-      main.scrollTo({ top: nextTop, behavior: "auto" });
-    } else {
-      main.scrollTop = nextTop;
-    }
+    revealControlWithinScroller(target, main);
   }, delay);
   return true;
 }
@@ -432,6 +438,7 @@ function handleKeyboardControlFocusIn(event) {
   const pageTarget = pageTextControl(event.target);
   const target = modalTarget || pageTarget;
   clearKeyboardFocusScrollTimers();
+  keyboardFocusScrollSuppressed = false;
   updateKeyboardControlFocusState(target);
   if (!target) return;
   const scrollFocusedControl = modalTarget
@@ -460,10 +467,14 @@ function installModalKeyboardFocusGuards() {
   refreshVisualViewportModalVars();
   document.addEventListener("focusin", handleKeyboardControlFocusIn, true);
   document.addEventListener("focusout", handleKeyboardControlFocusOut, true);
+  // A touch can scroll without moving focus. Cancel before the browser dispatches the click.
+  ["pointerdown", "touchstart", "touchmove", "wheel"].forEach((eventName) => {
+    document.addEventListener(eventName, yieldKeyboardScrollToUser, { capture: true, passive: true });
+  });
   window.addEventListener("resize", handleModalViewportChange, { passive: true });
   if (window.visualViewport) {
     window.visualViewport.addEventListener("resize", handleModalViewportChange, { passive: true });
-    window.visualViewport.addEventListener("scroll", handleModalViewportChange, { passive: true });
+    window.visualViewport.addEventListener("scroll", refreshVisualViewportModalVars, { passive: true });
   }
 }
 

@@ -5995,19 +5995,20 @@ test("modal and page fields stay visible above mobile keyboards", async () => {
   const context = createAppContext();
   const modalSelector = run(context, "MODAL_TEXT_CONTROL_SELECTOR");
   context.__modalScrollOptions = [];
-  context.__modalField = {
-    scrollIntoView(options) {
-      context.__modalScrollOptions.push(options);
-    }
+  context.window.innerHeight = 800;
+  context.window.visualViewport = { height: 360, offsetTop: 0 };
+  context.__modalCard = {
+    scrollTop: 0,
+    getBoundingClientRect: () => ({ top: 8, bottom: 352 }),
+    scrollTo: options => context.__modalScrollOptions.push(options)
   };
-  context.__modalCard = {};
   context.__modalInput = {
+    getBoundingClientRect: () => ({ top: 600, bottom: 644 }),
     matches(selector) {
       return selector === modalSelector;
     },
     closest(selector) {
       if (selector === ".modal-card") return context.__modalCard;
-      if (selector.includes(".field")) return context.__modalField;
       return null;
     }
   };
@@ -6016,8 +6017,7 @@ test("modal and page fields stay visible above mobile keyboards", async () => {
   assert.equal(run(context, "scrollFocusedModalControlIntoView(__modalInput, 0)"), true);
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(context.__modalScrollOptions.length, 1);
-  assert.equal(context.__modalScrollOptions[0].block, "center");
-  assert.equal(context.__modalScrollOptions[0].inline, "nearest");
+  assert.equal(context.__modalScrollOptions[0].top, 308);
   assert.equal(context.__modalScrollOptions[0].behavior, "auto");
 
   const pageSelector = run(context, "PAGE_TEXT_CONTROL_SELECTOR");
@@ -6040,6 +6040,7 @@ test("modal and page fields stay visible above mobile keyboards", async () => {
     }
   };
   context.__pageInput = {
+    getBoundingClientRect: () => ({ top: 600, bottom: 644 }),
     matches(selector) {
       return selector === pageSelector;
     },
@@ -6062,34 +6063,33 @@ test("activity field focus cancels stale mobile keyboard scrolling", async () =>
   const context = createAppContext();
   const modalSelector = run(context, "MODAL_TEXT_CONTROL_SELECTOR");
   context.__activityFocusScrolls = [];
-  context.__activityModalCard = {};
-  context.__firstActivityField = {
-    scrollIntoView(options) {
-      context.__activityFocusScrolls.push({ field: "first", options });
-    }
-  };
-  context.__secondActivityField = {
-    scrollIntoView(options) {
-      context.__activityFocusScrolls.push({ field: "second", options });
+  context.window.visualViewport = { height: 400, offsetTop: 0 };
+  let inputBottom = 544;
+  context.__activityModalCard = {
+    scrollTop: 0,
+    getBoundingClientRect: () => ({ top: 8, bottom: 400 }),
+    scrollTo(options) {
+      context.__activityFocusScrolls.push(options);
+      inputBottom = 384;
     }
   };
   context.__firstActivityInput = {
+    getBoundingClientRect() { throw new Error("Stale input must not be measured"); },
     matches(selector) {
       return selector === modalSelector;
     },
     closest(selector) {
       if (selector === ".modal-card") return context.__activityModalCard;
-      if (selector.includes(".field")) return context.__firstActivityField;
       return null;
     }
   };
   context.__secondActivityInput = {
+    getBoundingClientRect: () => ({ top: inputBottom - 44, bottom: inputBottom }),
     matches(selector) {
       return selector === modalSelector;
     },
     closest(selector) {
       if (selector === ".modal-card") return context.__activityModalCard;
-      if (selector.includes(".field")) return context.__secondActivityField;
       return null;
     }
   };
@@ -6105,9 +6105,9 @@ test("activity field focus cancels stale mobile keyboard scrolling", async () =>
   );
   await new Promise((resolve) => setTimeout(resolve, 560));
 
-  assert.equal(context.__activityFocusScrolls.filter((entry) => entry.field === "first").length, 0);
-  assert.equal(context.__activityFocusScrolls.filter((entry) => entry.field === "second").length, 3);
-  assert.ok(context.__activityFocusScrolls.every((entry) => entry.options.behavior === "auto"));
+  assert.equal(context.__activityFocusScrolls.length, 1);
+  assert.equal(context.__activityFocusScrolls[0].top, 160);
+  assert.equal(context.__activityFocusScrolls[0].behavior, "auto");
 });
 
 function settledPlayerTestContext() {

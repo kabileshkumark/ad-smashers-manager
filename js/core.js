@@ -346,9 +346,6 @@ function queueScrollSave() {
   scrollActivityTimer = setTimeout(() => {
     document.body.classList.remove("is-scrolling-content");
   }, 260);
-  if (window.scrollY || document.documentElement.scrollTop || document.body.scrollTop) {
-    window.scrollTo(0, 0);
-  }
   clearTimeout(scrollSaveTimer);
   scrollSaveTimer = setTimeout(() => {
     rememberScrollPosition();
