@@ -63,6 +63,39 @@ service cloud.firestore {
         && request.resource.data.status in ["active", "invited", "disabled"];
     }
 
+    function adSmashersRecordCount(collections) {
+      return collections.get("groups", []).size()
+        + collections.get("archivedGroups", []).size()
+        + collections.get("courts", []).size()
+        + collections.get("players", []).size()
+        + collections.get("archivedPlayers", []).size()
+        + collections.get("sessions", []).size()
+        + collections.get("activities", []).size()
+        + collections.get("paymentGroups", []).size()
+        + collections.get("archivedPaymentGroups", []).size()
+        + collections.get("paymentTransactions", []).size()
+        + collections.get("advances", []).size();
+    }
+
+    // Every data write belongs to one versioned, audited atomic save.
+    function isSafeAdSmashersCommit() {
+      let root = /databases/$(database)/documents/adSmashers/main;
+      let before = exists(root) ? get(root).data : { "version": 0, "saveId": "", "collections": {} };
+      let after = getAfter(root).data;
+      let audit = getAfter(/databases/$(database)/documents/adSmashers/main/auditLogs/$(after.saveId)).data;
+      return after.appId == "adSmashers"
+        && after.version is int
+        && after.version == before.version + 1
+        && after.saveId != before.get("saveId", "")
+        && audit.id == after.saveId
+        && audit.writeProtocol == 2
+        && audit.baseVersion == before.version
+        && audit.version == after.version
+        && audit.recoveryId == after.get("recoveryId", "")
+        && audit.actor.uid == request.auth.uid
+        && (adSmashersRecordCount(before.collections) == 0 || adSmashersRecordCount(after.collections) > 0);
+    }
+
     match /planners/{plannerId} {
       allow read: if isHealthyPlannerMember(plannerId);
       allow create, update, delete: if isHealthyPlannerAdmin(plannerId);
@@ -89,7 +122,8 @@ service cloud.firestore {
 
     match /adSmashers/main {
       allow read: if canReadAdSmashers();
-      allow write: if canWriteAdSmashers();
+      allow create, update: if canWriteAdSmashers() && isSafeAdSmashersCommit();
+      allow delete: if false;
 
       match /members/{uid} {
         allow read: if canManageAdSmashersMembers() || (signedIn() && request.auth.uid == uid);
@@ -99,7 +133,7 @@ service cloud.firestore {
 
       match /{collection}/{document} {
         allow read: if collection != "members" && canReadAdSmashers();
-        allow write: if collection != "members" && canWriteAdSmashers();
+        allow write: if collection != "members" && canWriteAdSmashers() && isSafeAdSmashersCommit();
       }
     }
 

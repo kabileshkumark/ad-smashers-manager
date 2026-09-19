@@ -88,7 +88,7 @@ function renderCloudLoadError() {
             <h1>Your Data Did Not Load</h1>
           </div>
         </div>
-        <p class="login-copy">Your data is not deleted. This device could not load it, so the app is paused instead of showing empty records.</p>
+        <p class="login-copy">This device could not verify your saved data. The app is paused to avoid saving incomplete records.</p>
         <p class="login-error" role="alert">${escapeHtml(DATA_LOAD_ERROR_MESSAGE)}</p>
         <div class="toolbar">
           <button class="btn primary" type="button" data-action="retry-cloud-load">Retry Data Load</button>
