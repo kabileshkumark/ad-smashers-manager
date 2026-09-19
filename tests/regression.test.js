@@ -5711,7 +5711,8 @@ test("startup and recovery screens hide backend provider details", () => {
 
   html = run(context, 'document.querySelector("#app").innerHTML');
   assert.match(html, /Your Data Did Not Load/);
-  assert.match(html, /Your data is not deleted/);
+  assert.match(html, /app is paused to avoid saving incomplete records/);
+  assert.doesNotMatch(html, /Your data is not deleted/);
   assert.match(html, /Could not load your data\. Check your connection and try again\./);
   assert.doesNotMatch(html, /Firestore request to Firebase failed|Firebase|Firestore/i);
   assert.match(html, /data-action="retry-cloud-load"/);
@@ -6851,6 +6852,7 @@ test("cloud save commits a versioned write with update-time precondition", async
   assert.equal(playerWrite.update.fields.name.stringValue, "Saved Player");
   assert.ok(auditWrite, "save should write an audit log");
   assert.equal(auditWrite.update.fields.action.stringValue, "cloudSave");
+  assert.equal(auditWrite.update.fields.writeProtocol.integerValue, "2");
   assert.equal(auditWrite.update.fields.retentionDays.integerValue, "30");
   assert.equal(auditWrite.update.fields.actor.mapValue.fields.email.stringValue, "admin@adsmashers.app");
   assert.equal(auditWrite.update.fields.actor.mapValue.fields.uid.stringValue, "test-uid");
@@ -6865,6 +6867,170 @@ test("cloud save commits a versioned write with update-time precondition", async
   assert.ok(!deletes.includes("projects/home-kaish/databases/(default)/documents/adSmashers/main/auditLogs/audit-current"));
   assert.equal(run(context, "cloudStateVersion"), 8);
   assert.equal(run(context, "cloudStateUpdateTime"), "2026-07-03T04:01:00.000000Z");
+});
+
+test("an in-flight empty save cannot borrow a later load's revision and deletion list", async () => {
+  const context = createAppContext();
+  const healthy = baseFixture({ players: [player("p1", "Saved Player")] });
+  let releaseAudit;
+  let reachedAudit;
+  const auditStarted = new Promise((resolve) => { reachedAudit = resolve; });
+  const auditResponse = new Promise((resolve) => { releaseAudit = resolve; });
+  const reads = structuredFetchForState(healthy, 1492, "2026-09-18T18:15:51.128677Z");
+  const commits = [];
+  context.fetch = async (url, request = {}) => {
+    if (url.includes("/auditLogs?")) {
+      reachedAudit();
+      return auditResponse;
+    }
+    if (url.endsWith("documents:commit")) {
+      commits.push(JSON.parse(request.body));
+      return jsonResponse(200, { commitTime: "2026-09-18T18:16:07.683021Z" });
+    }
+    return reads(url, request);
+  };
+  const save = run(context, "saveCloudState(state)").catch((error) => error);
+  await auditStarted;
+  await run(context, "loadCloudState().then((loaded) => { state = loaded; })");
+  releaseAudit(jsonResponse(200, structuredAuditLogsList([])));
+  const result = await save;
+  assert.equal(commits.length, 0, "must not submit version 1 with version 1492's precondition and delete all players");
+  assert.ok(result.cloudStateConflict || result.cloudSaveSafety);
+  assert.equal(run(context, "cloudStateVersion"), 1492);
+});
+
+test("a populated workspace cannot be replaced by an empty normal save", async () => {
+  const context = createAppContext();
+  const healthy = baseFixture({ players: [player("p1", "Saved Player")], sessions: [baseSession()] });
+  context.fetch = structuredFetchForState(healthy, 8);
+  await run(context, "loadCloudState()");
+  let commits = 0;
+  context.fetch = async (url) => {
+    if (url.endsWith("documents:commit")) commits += 1;
+    return jsonResponse(200, {});
+  };
+  await assert.rejects(run(context, "saveCloudState(emptyState())"), (error) => Boolean(error.cloudSaveSafety));
+  assert.equal(commits, 0);
+  assert.equal(run(context, "cloudStateVersion"), 8);
+});
+
+test("signing out while a save waits for audit records cancels its commit", async () => {
+  const context = createAppContext();
+  setAppState(context, baseFixture({ players: [player("p1", "Saved Player")] }));
+  let releaseAudit;
+  let reachedAudit;
+  const started = new Promise((resolve) => { reachedAudit = resolve; });
+  const delayed = new Promise((resolve) => { releaseAudit = resolve; });
+  let commits = 0;
+  context.fetch = async (url) => {
+    if (url.includes("/auditLogs?")) { reachedAudit(); return delayed; }
+    commits += 1;
+    return jsonResponse(200, {});
+  };
+  const save = run(context, "saveCloudState(state)").catch((error) => error);
+  await started;
+  await run(context, "signOutFromFirebase()");
+  releaseAudit(jsonResponse(200, {}));
+  assert.equal((await save).cloudSessionChanged, true);
+  assert.equal(commits, 0);
+  assert.equal(run(context, "currentUser"), null);
+});
+
+test("token refresh cannot restore a signed-out user's credentials", async () => {
+  const context = createAppContext();
+  context.URLSearchParams = URLSearchParams;
+  run(context, "currentUser.expiresAt = 0");
+  let release;
+  context.fetch = () => new Promise((resolve) => { release = resolve; });
+  const refresh = run(context, "ensureFirebaseIdToken()").catch((error) => error);
+  await run(context, "signOutFromFirebase()");
+  release(jsonResponse(200, { id_token: "late-token", refresh_token: "late-refresh", user_id: "test-uid" }));
+  assert.equal((await refresh).cloudSessionChanged, true);
+  assert.equal(run(context, "currentUser"), null);
+  assert.equal(run(context, "loadFirebaseAuthSession()"), null);
+});
+
+test("a load finishing after sign-out does not repopulate save metadata", async () => {
+  const context = createAppContext();
+  const healthy = baseFixture({ players: [player("p1", "Saved Player")] });
+  const reads = structuredFetchForState(healthy, 12);
+  let release;
+  let started;
+  const waiting = new Promise((resolve) => { started = resolve; });
+  context.fetch = async (url, request) => {
+    if (url.includes("/players?")) {
+      started();
+      await new Promise((resolve) => { release = resolve; });
+    }
+    return reads(url, request);
+  };
+  const loading = run(context, "loadCloudState()").catch((error) => error);
+  await waiting;
+  await run(context, "signOutFromFirebase()");
+  release();
+  assert.equal((await loading).cloudSessionChanged, true);
+  assert.equal(run(context, "cloudStateVersion"), 0);
+  assert.equal(run(context, "cloudStateExists"), false);
+});
+
+test("missing indexed records fail closed instead of loading a deletable partial state", async () => {
+  const context = createAppContext();
+  const healthy = baseFixture({ players: [player("p1", "Saved Player")] });
+  const reads = structuredFetchForState(healthy, 12);
+  context.fetch = async (url, request) => url.includes("/players?") ? jsonResponse(200, {}) : reads(url, request);
+  await assert.rejects(run(context, "loadCloudState()"), (error) => Boolean(error.cloudSaveSafety));
+  assert.equal(run(context, "cloudStateVersion"), 0);
+});
+
+test("a root change during collection reads is rejected", async () => {
+  const context = createAppContext();
+  const healthy = baseFixture({ players: [player("p1", "Saved Player")] });
+  const reads = structuredFetchForState(healthy, 12);
+  let roots = 0;
+  context.fetch = async (url, request) => {
+    if (url.endsWith("/documents/adSmashers/main") && ++roots === 2) {
+      return jsonResponse(200, structuredWorkspaceDocument(healthy, 13, "2026-09-19T05:00:00Z"));
+    }
+    return reads(url, request);
+  };
+  await assert.rejects(run(context, "loadCloudState()"), (error) => Boolean(error.cloudStateConflict));
+  assert.equal(run(context, "cloudStateVersion"), 0);
+});
+
+test("safety-blocked saves preserve the pending journal and do not schedule retries", async () => {
+  const context = createAppContext();
+  const healthy = baseFixture({ players: [player("p1", "Saved Player")] });
+  context.fetch = structuredFetchForState(healthy, 12);
+  await run(context, "loadCloudState()");
+  run(context, "state = emptyState(); persistPendingCloudState(state)");
+  await run(context, "flushCloudSave()");
+  assert.equal(run(context, "cloudSaveConflict"), true);
+  assert.equal(run(context, "cloudSavePending"), false);
+  assert.equal(run(context, "cloudSaveTimer"), null);
+  assert.ok(run(context, "readPendingCloudState()"));
+});
+
+test("pre-recovery pending changes are preserved separately and never replayed over restored data", async () => {
+  const context = createAppContext();
+  setAppState(context, baseFixture({ players: [player("old", "Old Pending Player")] }));
+  run(context, "persistPendingCloudState(state); cloudStateRecoveryId = 'recovery-test'");
+  context.__restored = baseFixture({ players: [player("restored", "Restored Player")] });
+  const restored = run(context, "restorePendingCloudState(__restored)");
+  assert.deepEqual(restored.players.map(x=>x.id), ['restored']);
+  assert.equal(run(context, "readPendingCloudState()"), null);
+  const retained = JSON.parse(context.localStorage.getItem('ad-smashers-pending-cloud-state-v1-before-recovery-test'));
+  assert.equal(retained.state.players[0].id, 'old');
+});
+
+test("post-recovery pending changes remain replayable on the same recovered baseline", async () => {
+  const context = createAppContext();
+  run(context, "cloudStateRecoveryId = 'recovery-test'");
+  setAppState(context, baseFixture({ players: [player("new", "New Pending Player")] }));
+  run(context, "persistPendingCloudState(state)");
+  context.__restored = baseFixture({ players: [player("restored", "Restored Player")] });
+  const restored = run(context, "restorePendingCloudState(__restored)");
+  assert.ok(restored.players.some(x=>x.id === 'new'));
+  assert.ok(run(context, "readPendingCloudState()"));
 });
 
 test("cloud save rejects oversized commits before any partial write", async () => {
