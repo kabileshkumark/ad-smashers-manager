@@ -561,6 +561,11 @@ function handleClick(event) {
     render();
     return;
   }
+  if (action === "set-group-advance-summary-mode" && modal?.type === "paymentGroupSummary") {
+    modal = { ...modal, mode: "advances", advanceMode: actionTarget.dataset.summaryMode === "complete" ? "complete" : "latest" };
+    render();
+    return;
+  }
   if (action === "copy-player-payment-summary") {
     const mode = actionTarget.dataset.summaryMode === "reminder" ? "reminder" : "summary";
     const text = mode === "reminder"
@@ -580,10 +585,10 @@ function handleClick(event) {
     return;
   }
   if (action === "copy-payment-group-summary") {
-    const mode = actionTarget.dataset.summaryMode === "reminder" ? "reminder" : "summary";
+    const mode = actionTarget.dataset.summaryMode;
     const text = mode === "reminder"
       ? buildPaymentGroupReminderCopy(actionTarget.dataset.paymentGroup)
-      : buildPaymentGroupSummaryCopy(actionTarget.dataset.paymentGroup);
+      : mode === "advances" ? buildPaymentGroupAdvanceSummaryCopy(actionTarget.dataset.paymentGroup, actionTarget.dataset.advanceMode) : buildPaymentGroupSummaryCopy(actionTarget.dataset.paymentGroup);
     copyText(text, mode === "reminder" ? "Payment group reminder copied." : "Payment group summary copied.");
     render();
     return;

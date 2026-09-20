@@ -33,7 +33,8 @@ function sessionHasEnded(session) {
 
 function allSessionPaymentsPaid(session) {
   const payments = Object.values(session.payments || {});
-  return payments.length > 0 && payments.every((payment) => paymentEffectiveStatus(session, payment) === "Paid");
+  return withLedgerCoverageSnapshotCache(() => payments.length > 0
+    && payments.every((payment) => paymentEffectiveStatus(session, payment) === "Paid"));
 }
 
 function setSessionStage(session, stage) {

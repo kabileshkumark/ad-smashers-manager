@@ -1,6 +1,6 @@
 # Payment Lifecycle and Ledger Invariants
 
-**Status:** Released rule set for technical build 1.0.10; production verified under ADS-18
+**Status:** Owner-approved rule set for technical build 1.0.17; deployment evidence is maintained with the release record.
 
 **Formal release:** Version 1.0
 
@@ -25,8 +25,8 @@ flowchart LR
 2. Poll responses and the published list are provisional. They do not create collectible charges.
 3. Actual attendance is the charge basis after the session ends. Waiting-list players are not charged.
 4. Each active attendee is charged for their own seat and guests. Organizer and co-organizer exemptions apply only to their own seat.
-5. Cash receipts are recorded against player or payment-group balances. Cash above the remaining balance becomes Credit owned only by the payer.
-6. Intentional Advance and overpayment Credit are separate funding types.
+5. Cash receipts are recorded against player or payment-group balances. Cash above the remaining balance belongs to the payer; it becomes Credit unless the shared-Advance rule below applies.
+6. Intentional Advance and ordinary Credit remain separate funding types. Eligible contributions extend a currently funded group Advance, but do not reopen an exhausted cycle.
 7. One canonical ledger snapshot supplies Sessions, Payments, Player Balances, group cards, histories, reminders, session completion, and Dashboard.
 
 ## Definitions
@@ -34,8 +34,8 @@ flowchart LR
 - **Court expense:** Amount paid to the venue for a session.
 - **Charge:** Amount owed by one player for a session or activity.
 - **Cash receipt:** New money received from a player or payment-group payer.
-- **Advance:** Intentional prepayment recorded in the Advance section. It settles the payer's own charges first, then active members of saved groups for which that player is the payer.
-- **Group Advance:** A payment-group payer's remaining intentional Advance allocated to active members of that saved group.
+- **Advance:** Intentional prepayment, plus eligible contributions during an active shared-Advance cycle. Each source retains its contributor and original record.
+- **Group Advance:** Advance from any member of an active saved group, available to cover that group's charges. Sharing usage does not transfer ownership of the unused amount.
 - **Credit:** Excess cash from a completed payment or an organizer-relative activity over-contribution. It belongs only to the player who created it.
 - **Group Credit:** A payer's remaining Credit allocated to active members of a saved payment group.
 - **Allocation:** Funding applied to a specific charge.
@@ -46,20 +46,27 @@ flowchart LR
 The ledger applies funding in this order:
 
 1. Recorded cash already allocated to the charge.
-2. The debtor's intentional Advance, oldest charge first.
-3. The debtor's own Credit, oldest charge first.
-4. Remaining intentional Advance from the saved payment-group payer.
-5. Remaining Credit from the saved payment-group payer.
-6. New cash entered for an individual or group payment.
+2. Available Advance and Credit sources in date, timestamp and recorded-order sequence, applied to eligible outstanding charges in canonical ledger order.
+3. Advance from any group member may cover group charges. Ordinary Credit covers its owner and, for the group's configured payer, eligible group members.
+4. New cash entered for an individual or group payment covers the remaining canonical balance.
 
 Group rules:
 
-- Advance and Credit transfer only from the configured payer through an active saved payment group.
+- Advance can be used for all active saved-group members regardless of which member deposited it. Ordinary Credit retains the configured-payer sharing restriction.
 - A payer's Advance and Credit are each reserved once across all groups; neither can be shown as covering multiple balances simultaneously.
-- Groups are processed in persisted creation order. Within a group, partial funding is split across member balances using the existing deterministic cent-safe split, then applied oldest charge first.
+- Groups are processed in persisted creation order. Shared source objects and cent-safe arithmetic prevent spending a source more than once.
 - Existing overlapping memberships are resolved once in persisted group order. New active overlaps must be rejected because payment responsibility would be ambiguous.
 - Automatic Credit allocation is derived. It must never increase a charge's `paidAmount` or create a zero-cash transaction.
-- New group cash applies only to the canonical remaining group balance. Any excess becomes Credit for the payer.
+- New group cash applies only to the canonical remaining group balance. Excess remains owned by its payer and follows the shared-Advance cycle rule below.
+
+## Shared Advance Cycle
+
+- A positive combined group Advance allows eligible member payment overages and non-organizer, non-shuttle activity contributions to join Advance.
+- An activity's full contribution is shown in the Advance statement. The contributor's already-paid own share appears once as usage; only the net surplus remains available for other charges. The own share is not reopened as a debt.
+- Eligibility is evaluated before the contribution and its own activity, using recorded dates and available transaction timestamps. Later deposits cannot retrospectively reopen earlier exhausted cycles.
+- Once combined Advance reaches zero, later contributions remain ordinary Credit until a new explicit deposit. Undated legacy Credit is not silently converted.
+- Latest Advances uses each depositor's latest deposit and qualifying subsequent contributions. Non-depositors follow the open shared cycle. Earlier unused balances and split-deposit usage remain visible; Complete Summary includes all active sources.
+- Statements list contributions, total Advance, individual usage items grouped by member, total used, remaining Advance and dues. Receipt and activity history remain the audit source.
 
 ## Activity Settlement Contract
 
@@ -81,7 +88,7 @@ activity_balance = allocated_share - player_contribution
 - Negative balance becomes Credit owned by that player.
 - Zero balance is Settled and produces neither Due nor Credit.
 
-4. Activity-generated Credit enters the same owner-specific Credit ledger as payment overage. It can cover that player's later personal charges or eligible saved-group member charges, but ownership never transfers.
+4. Activity-generated surplus enters owner-specific Credit unless the shared-Advance cycle rule applies. Ownership never transfers; converted activity contributions retain a link to their original activity and include the own-share usage exactly once.
 5. Editing an activity recalculates allocations from the updated total, payers, participants, and split. Existing receipts are preserved and reconciled; cash beyond the revised charge becomes payer Credit.
 6. Deleting an activity removes its unpaid derived balances and activity-generated Credit. Existing receipts remain in history, and receipt cash no longer required by the deleted activity becomes payer Credit.
 7. Legacy one-payer activities normalize to one contribution, Equal split, and the currently configured Organizer without changing their recorded cash history.
@@ -98,7 +105,7 @@ For every player:
 
 ```text
 player_due = sum(player charge outstanding)
-remaining_advance = advance_received - advance_applied_to_own_charges - group_advance_provided
+remaining_advance = advance_received - advance_applied_to_own_charges - group_advance_provided - directly_paid_own_activity_share
 remaining_credit = credit_created - own_credit_applied - group_credit_provided
 ```
 
@@ -127,10 +134,10 @@ Dashboard values must come from the same ledger snapshot as operational pages.
 | Court Spent | Saved billable session court expenses |
 | Gross Charges | Final attendee charges |
 | Cash Applied | Cash allocations to charges |
-| Advance Applied | Intentional Advance allocations |
+| Advance Applied | Canonical Advance allocations; direct vendor payments remain distinct from cash receipts |
 | Credit Applied | Own and payment-group Credit allocations |
 | Outstanding | Canonical charge outstanding |
-| Available Advance | Unallocated intentional Advance |
+| Available Advance | Unallocated qualifying Advance sources |
 | Available Credit | Unallocated overpayment Credit |
 | Organizer Net | Player charges minus court, water, and shuttle expenses |
 
