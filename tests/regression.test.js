@@ -1533,13 +1533,11 @@ test("payment summary previews use current ledger totals and keep history transa
 
   const groupText = run(context, 'buildPaymentGroupSummaryCopy("copy-group")');
   assert.match(groupText, /\*Payment Summary - Aishu Group\*/);
-  assert.match(groupText, /Paid by: Kabilesh/);
   assert.match(groupText, /Members: Kabilesh, Aishu/);
-  assert.match(groupText, /\*Payments from the start\*[\s\S]*Kabilesh paid 15 AED \(15 AED applied\)/);
-  assert.match(groupText, /\*Current dues\*/);
-  assert.match(groupText, /\*Total due: 35 AED\*/);
-  assert.match(groupText, /\*By member\*[\s\S]*\*Kabilesh - Clear\*[\s\S]*No pending items/);
-  assert.match(groupText, /\*Aishu - 35 AED due\*[\s\S]*Dinner: 10 AED/);
+  assert.match(groupText, /\*Per-person charges\*/);
+  assert.match(groupText, /\*Payments received\*[\s\S]*Aishu paid 10 AED[\s\S]*Kabilesh paid 15 AED/);
+  assert.match(groupText, /\*Remaining due: 35 AED\*/);
+  assert.doesNotMatch(groupText, /By member|Pending items|Paid by:|Aishu - 35 AED due/);
   assert.match(groupText, /_Generated via AD Smashers Manager app\._$/);
   assert.equal(run(context, 'paymentGroupSummaryPlayerIds(getPaymentGroup("copy-group")).reduce((total, id) => total + paymentSummaryCoverage([id]).balance, 0)'), 35);
 
@@ -1556,6 +1554,585 @@ test("payment summary previews use current ledger totals and keep history transa
   const groupHistoryHtml = run(context, 'renderGroupPaymentHistoryModal("copy-group")');
   assert.match(groupHistoryHtml, /Aishu Group/);
   assert.doesNotMatch(groupHistoryHtml, /Current Allocation|Credit applied|Pending items/);
+});
+
+function groupSummaryFixture(ids = ["a", "b", "c"], rate = 100) {
+  return baseFixture({
+    players: ids.map((id) => player(id, id.toUpperCase())),
+    paymentGroups: [{ id: "summary-group", name: "QA Group", payerId: ids[0], playerIds: ids, guests: [], active: true }],
+    sessions: [baseSession({
+      id: "summary-session",
+      perPersonAmount: rate,
+      responses: ids.map((id, index) => ({
+        id: `response-${id}`, playerId: id, voteOrder: index + 1,
+        attendanceChoice: "in", guestCount: 0, rawOptions: ["I'm in"]
+      }))
+    })]
+  });
+}
+
+test("group summary separates rates, total, payer receipts and remaining due without changing allocations", () => {
+  const context = createAppContext();
+  setAppState(context, groupSummaryFixture());
+  run(context, 'applyGroupPayment({ paidById: "a", playerIds: ["a", "b", "c"], amountPaid: 75, groupId: "summary-group" })');
+  const before = jsonValue(context, "state");
+  const text = run(context, 'buildPaymentGroupSummaryCopy("summary-group")');
+  assert.match(text, /100 AED per player/);
+  for (const name of ["A", "B", "C"]) assert.ok(text.includes(`- ${name}: 100 AED`));
+  assert.match(text, /\*Total charges: 300 AED\*/);
+  assert.match(text, /A paid 75 AED/);
+  assert.match(text, /Payments \/ settlements applied: 75 AED/);
+  assert.match(text, /\*Remaining due: 225 AED\*/);
+  const sections = ["*Per-person charges*", "*Total charges:", "*Payments received*", "*Remaining due:"];
+  sections.forEach((section, i) => { if (i) assert.ok(text.indexOf(sections[i - 1]) < text.indexOf(section)); });
+  assert.doesNotMatch(text, /By member|75 AED due|Pending items|Advance applied|Credit applied/);
+  assert.deepEqual(jsonValue(context, "state"), before);
+  const reminder = run(context, 'buildPaymentGroupReminderCopy("summary-group")');
+  assert.match(reminder, /By member/);
+  assert.match(reminder, /\*Total due: 225 AED\*/);
+
+  run(context, 'applyGroupPayment({ paidById: "b", playerIds: ["b"], amountPaid: 25 })');
+  const multiple = run(context, 'buildPaymentGroupSummaryCopy("summary-group")');
+  assert.match(multiple, /A paid 75 AED[\s\S]*B paid 25 AED/);
+  assert.match(multiple, /Remaining due: 200 AED/);
+  run(context, 'reversePaymentTransaction(state.paymentTransactions[0].id)');
+  const reversed = run(context, 'buildPaymentGroupSummaryCopy("summary-group")');
+  assert.doesNotMatch(reversed, /A paid 75 AED/);
+  assert.match(reversed, /B paid 25 AED/);
+  assert.match(reversed, /Remaining due: 275 AED/);
+});
+
+test("group summary scopes outside receipts, keeps overpayment as owner Credit and includes settled charges", () => {
+  const context = createAppContext();
+  const fixture = groupSummaryFixture(["a", "b", "c", "d"]);
+  fixture.paymentGroups[0].playerIds = ["a", "b", "c"];
+  setAppState(context, fixture);
+  run(context, 'applyGroupPayment({ paidById: "d", playerIds: ["c", "d"], amountPaid: 100 })');
+  let text = run(context, 'buildPaymentGroupSummaryCopy("summary-group")');
+  assert.match(text, /D paid 50 AED for these members \(full receipt: 100 AED\)/);
+  assert.match(text, /Total charges: 300 AED/);
+  assert.match(text, /Remaining due: 250 AED/);
+  run(context, 'applyGroupPayment({ paidById: "a", playerIds: ["a", "b", "c"], amountPaid: 300, groupId: "summary-group" })');
+  text = run(context, 'buildPaymentGroupSummaryCopy("summary-group")');
+  assert.match(text, /Total charges: 300 AED/);
+  assert.match(text, /A paid 300 AED/);
+  assert.match(text, /Payments \/ settlements applied: 300 AED/);
+  assert.match(text, /Remaining due: 0 AED/);
+  assert.match(text, /A - Credit remaining: 50 AED/);
+  assert.doesNotMatch(text, /Advance/);
+  assert.doesNotMatch(run(context, 'renderPaymentGroupSummaryModal("summary-group")'), /data-summary-mode="advances"/);
+});
+
+test("group summary scopes older group receipts to current members without changing history", () => {
+  const context = createAppContext();
+  setAppState(context, groupSummaryFixture());
+  run(context, 'applyGroupPayment({ paidById: "a", playerIds: ["a", "b", "c"], amountPaid: 300, groupId: "summary-group" }); getPaymentGroup("summary-group").playerIds = ["a", "b"];');
+  const text = run(context, 'buildPaymentGroupSummaryCopy("summary-group")');
+  assert.match(text, /Total charges: 200 AED/);
+  assert.match(text, /A paid 200 AED for these members \(full receipt: 300 AED\)/);
+  assert.match(text, /Remaining due: 0 AED/);
+  assert.equal(run(context, 'paymentGroupTransactions("summary-group")[0].amountPaid'), 300);
+});
+
+test("group charges respect guest places, role exemptions, changing rates and future sessions", () => {
+  const context = createAppContext();
+  const fixture = groupSummaryFixture();
+  fixture.settings.organizerPlayerId = "a";
+  fixture.sessions[0].responses[1].guestCount = 1;
+  fixture.sessions.push(baseSession({
+    id: "later-rate", date: isoDateFromToday(-2), perPersonAmount: 25,
+    responses: [{ id: "c-later", playerId: "c", voteOrder: 1, attendanceChoice: "in", guestCount: 0 }]
+  }));
+  fixture.sessions.push(baseSession({
+    id: "future-rate", date: isoDateFromToday(7), perPersonAmount: 900,
+    responses: [{ id: "c-future", playerId: "c", voteOrder: 1, attendanceChoice: "in", guestCount: 0 }]
+  }));
+  setAppState(context, fixture);
+  const text = run(context, 'buildPaymentGroupSummaryCopy("summary-group")');
+  assert.doesNotMatch(text, /- A: 100 AED/);
+  assert.match(text, /- B: 200 AED \(2 chargeable places, including guests\)/);
+  assert.match(text, /25 AED per player/);
+  assert.match(text, /Total charges: 325 AED/);
+  assert.match(text, /Remaining due: 325 AED/);
+  assert.doesNotMatch(text, /900 AED/);
+});
+
+test("group summary uses activity net charges without counting vendor contributions as cash receipts", () => {
+  const context = createAppContext();
+  const fixture = groupSummaryFixture();
+  fixture.settings.organizerPlayerId = "a";
+  fixture.sessions = [];
+  fixture.activities = [{
+    id: "dinner-summary", name: "Dinner", date: isoDateFromToday(-1), totalPaid: 90,
+    paidById: "a", contributions: [{ playerId: "a", amount: 30 }, { playerId: "b", amount: 60 }],
+    playerIds: ["a", "b", "c"], splitMode: "equal"
+  }];
+  setAppState(context, fixture);
+  const text = run(context, 'buildPaymentGroupSummaryCopy("summary-group")');
+  assert.match(text, /Total charges: 30 AED/);
+  assert.match(text, /30 AED split share; 0 AED payable to organizer/);
+  assert.match(text, /No recorded payment receipts/);
+  assert.doesNotMatch(text, /B paid 60 AED|A paid 30 AED/);
+  assert.match(text, /B - Credit remaining: 30 AED/);
+  assert.match(text, /Remaining due: 30 AED/);
+});
+
+test("group advance summaries combine deposits and split usage by member without changing ownership", () => {
+  const context = createAppContext();
+  setAppState(context, groupSummaryFixture(["w", "x", "y", "z"], 25));
+  run(context, `
+    getPaymentGroup("summary-group").payerId = "z";
+    recordPlayerAdvance("w", 50);
+    recordPlayerAdvance("w", 100);
+    recordPlayerAdvance("x", 75);
+  `);
+  const before = jsonValue(context, "state");
+  for (const mode of ["latest", "complete"]) {
+    const copy = run(context, `buildPaymentGroupAdvanceSummaryCopy("summary-group", "${mode}")`);
+    assert.match(copy, /\*Usage by member\*/);
+    for (const id of ["W", "X", "Y", "Z"]) assert.ok(copy.includes(`*${id} total:`));
+    assert.match(copy, /Remaining Advance: 125 AED/);
+    assert.match(copy, /Amount Due: 0 AED/);
+    assert.doesNotMatch(copy, /\*Latest Advance - W|\*Complete Advance Summary - W/);
+    assert.equal((copy.match(/Generated via AD Smashers Manager app/g) || []).length, 1);
+    const html = run(context, `renderPaymentGroupSummaryModal("summary-group", "advances", "${mode}")`);
+    assert.ok(html.includes(run(context, `escapeHtml(buildPaymentGroupAdvanceSummaryCopy("summary-group", "${mode}"))`)));
+    assert.match(html, /--summary-mode-count: 3/);
+    assert.match(html, /Latest Advances/);
+    assert.match(html, /Complete Summary/);
+    assert.ok(html.includes(`data-advance-mode="${mode}"`));
+  }
+  assert.deepEqual(jsonValue(context, "state"), before);
+  assert.match(run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group")'), /W: 100 AED[\s\S]*X: 75 AED[\s\S]*Total Advance: 175 AED/);
+  assert.match(run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group", "complete")'), /Total Advance: 225 AED/);
+
+  run(context, 'reversePaymentTransaction(state.paymentTransactions.find(t => t.paidById === "w" && t.amountPaid === 100).id)');
+  assert.match(run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group")'), /W: 50 AED[\s\S]*Total Advance: 125 AED/);
+  run(context, 'state.paymentTransactions.filter(t => !t.reversedAt).forEach(t => reversePaymentTransaction(t.id))');
+  assert.doesNotMatch(run(context, 'renderPaymentGroupSummaryModal("summary-group")'), /data-summary-mode="advances"/);
+});
+
+test("two member advances pay all four group members oldest-first and reverse without changing receipts", () => {
+  const context = createAppContext();
+  const fixture = groupSummaryFixture(["a", "b", "c", "d"]);
+  fixture.paymentGroups[0].payerId = "d";
+  setAppState(context, fixture);
+  run(context, 'recordPlayerAdvance("b", 200); recordPlayerAdvance("a", 300)');
+  assert.deepEqual(jsonValue(context, 'playerAdvanceSummary("b")'), { received: 200, deducted: 200, balance: 0 });
+  assert.deepEqual(jsonValue(context, 'playerAdvanceSummary("a")'), { received: 300, deducted: 200, balance: 100 });
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("summary-group"))'), 0);
+  for (const id of ["a", "b", "c", "d"]) assert.equal(run(context, `playerBalance("${id}")`), 0);
+  const copy = run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group")');
+  assert.match(copy, /Total Advance: 500 AED/);
+  for (const id of ["A", "B", "C", "D"]) assert.ok(copy.includes(`*${id} total: 100 AED*`));
+  assert.match(copy, /Total Used: 400 AED/);
+  assert.match(copy, /Remaining Advance: 100 AED/);
+  const beforeRestore = jsonValue(context, '({ players: [...ledgerCoverageSnapshot().players], receipts: state.paymentTransactions.map(t => normalizePaymentTransaction(t)) })');
+  run(context, 'state = restoreStateFromBackup(JSON.parse(JSON.stringify(state)))');
+  assert.deepEqual(jsonValue(context, '({ players: [...ledgerCoverageSnapshot().players], receipts: state.paymentTransactions })'), beforeRestore);
+  run(context, 'reversePaymentTransaction(state.paymentTransactions[1].id)');
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("summary-group"))'), 200);
+  assert.equal(run(context, 'playerAdvanceSummary("b").deducted'), 200);
+  assert.equal(run(context, 'state.paymentTransactions[0].amountPaid'), 200);
+  assert.doesNotMatch(run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group")'), /A: 300 AED/);
+});
+
+test("interleaved group advances retain exact deposit-to-member usage in latest summaries", () => {
+  const context = createAppContext();
+  const fixture = groupSummaryFixture(["a", "b", "c", "d"], 60);
+  fixture.paymentGroups[0].payerId = "d";
+  setAppState(context, fixture);
+  run(context, 'recordPlayerAdvance("a", 100); recordPlayerAdvance("b", 100); recordPlayerAdvance("a", 100)');
+  const cycles = jsonValue(context, 'playerAdvanceCycleSummaries("a")');
+  assert.deepEqual(cycles.map(cycle => ({ received: cycle.received, deducted: cycle.deducted, balance: cycle.balance })), [
+    { received: 100, deducted: 100, balance: 0 }, { received: 100, deducted: 40, balance: 60 }
+  ]);
+  assert.deepEqual(cycles[1].deductions.map(item => ({ player: item.coveredPlayerId, amount: item.amount })), [{ player: "c", amount: 40 }]);
+  const copy = run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group")');
+  assert.match(copy, /Total Advance: 200 AED/);
+  assert.match(copy, /\*D total: 0 AED\*/);
+  assert.match(copy, /\*A total: 20 AED\*/);
+  assert.match(copy, /\*B total: 60 AED\*/);
+  assert.match(copy, /\*C total: 60 AED\*/);
+  assert.match(copy, /Total Used: 140 AED/);
+  assert.match(copy, /Remaining Advance: 60 AED/);
+  const totalDeductions = run(context, '["a", "b"].reduce((sum, id) => sum + playerAdvanceSummary(id).deducted, 0)');
+  assert.equal(totalDeductions, 240);
+});
+
+test("oldest group advance is based on deposit time even if stored transaction order changes", () => {
+  const context = createAppContext();
+  setAppState(context, groupSummaryFixture(["a", "b", "c", "d"]));
+  run(context, `
+    recordPlayerAdvance("b", 200); recordPlayerAdvance("a", 300);
+    state.paymentTransactions[0].createdAt = "2026-09-01T09:00:00Z";
+    state.paymentTransactions[1].createdAt = "2026-09-01T10:00:00Z";
+    state.paymentTransactions.forEach(t => { t.date = "2026-09-01"; });
+    state.paymentTransactions.reverse();
+  `);
+  assert.deepEqual(jsonValue(context, 'playerAdvanceSummary("b")'), { received: 200, deducted: 200, balance: 0 });
+  assert.deepEqual(jsonValue(context, 'playerAdvanceSummary("a")'), { received: 300, deducted: 200, balance: 100 });
+});
+
+test("group advances preserve personal Credit restrictions and can be permanently deleted", () => {
+  const context = createAppContext();
+  const fixture = groupSummaryFixture(["a", "b", "c", "d"]);
+  fixture.paymentGroups[0].payerId = "d";
+  fixture.advances = { b: 150 };
+  setAppState(context, fixture);
+  run(context, 'recordPlayerAdvance("a", 300)');
+  assert.equal(run(context, 'playerRemainingCredit("b")'), 50);
+  assert.equal(run(context, 'playerAdvanceSummary("a").deducted'), 300);
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("summary-group"))'), 0);
+  run(context, 'deleteActivePaymentTransaction(state.paymentTransactions[0].id)');
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("summary-group"))'), 300);
+  assert.equal(run(context, 'playerRemainingCredit("b")'), 50);
+  assert.equal(run(context, 'state.paymentTransactions.length'), 0);
+});
+
+test("advances are spent once across overlapping payer groups and do not leak from unrelated members", () => {
+  const context = createAppContext();
+  const fixture = groupSummaryFixture(["a", "b", "c", "d"]);
+  fixture.paymentGroups = [
+    { id: "ab", name: "AB", payerId: "a", playerIds: ["a", "b"], active: true },
+    { id: "ac", name: "AC", payerId: "a", playerIds: ["a", "c"], active: true }
+  ];
+  setAppState(context, fixture);
+  run(context, 'recordPlayerAdvance("b", 200); recordPlayerAdvance("c", 50); recordPlayerAdvance("d", 400)');
+  assert.equal(run(context, 'playerBalance("a")'), 0);
+  assert.equal(run(context, 'playerBalance("b")'), 0);
+  assert.equal(run(context, 'playerBalance("c")'), 50);
+  assert.equal(run(context, 'playerRemainingAdvance("d")'), 300);
+  assert.equal(run(context, 'playerAdvanceSummary("b").deducted'), 200);
+  assert.equal(run(context, 'playerAdvanceSummary("c").deducted'), 50);
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("ac"))'), 50);
+});
+
+test("latest group advance summary separates untouched older balances from latest deposits", () => {
+  const context = createAppContext();
+  const fixture = groupSummaryFixture();
+  fixture.sessions = [];
+  setAppState(context, fixture);
+  run(context, 'recordPlayerAdvance("a", 100); recordPlayerAdvance("a", 200); recordPlayerAdvance("b", 75)');
+  const text = run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group")');
+  assert.match(text, /Total Advance: 275 AED/);
+  assert.match(text, /Total Used: 0 AED/);
+  assert.match(text, /Balance from these advances: 275 AED/);
+  assert.match(text, /Earlier advance balance: 100 AED/);
+  assert.match(text, /Remaining Advance: 375 AED/);
+});
+
+test("all group cards use final balances when an overlapping payer is covered in another group", () => {
+  const context = createAppContext();
+  const fixture = groupSummaryFixture();
+  fixture.paymentGroups = [
+    { id: "ab", name: "AB", payerId: "a", playerIds: ["a", "b"], active: true },
+    { id: "ac", name: "AC", payerId: "a", playerIds: ["a", "c"], active: true }
+  ];
+  setAppState(context, fixture);
+  run(context, 'recordPlayerAdvance("c", 200)');
+  assert.equal(run(context, 'playerBalance("a")'), 0);
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("ab"))'), 100);
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("ac"))'), 0);
+  assert.match(run(context, 'buildPaymentGroupSummaryCopy("ab")'), /Remaining due: 100 AED/);
+});
+
+test("archiving a settled advance contributor preserves the shared group coverage", () => {
+  const context = createAppContext();
+  setAppState(context, groupSummaryFixture());
+  run(context, 'recordPlayerAdvance("b", 300); saveState = () => {}; showToast = () => {};');
+  const before = jsonValue(context, '({ players: [...ledgerCoverageSnapshot().players], receipts: state.paymentTransactions })');
+  assert.equal(run(context, 'executeConfirmedDelete({dataset: {deleteType: "player", player: "b"}})'), true);
+  assert.deepEqual(jsonValue(context, '({ players: [...ledgerCoverageSnapshot().players], receipts: state.paymentTransactions })'), before);
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("summary-group"))'), 0);
+});
+
+test("group advance modal switches and copies the selected member summary mode", () => {
+  const context = createAppContext();
+  setAppState(context, groupSummaryFixture());
+  run(context, `recordPlayerAdvance("b", 200); render = () => {}; copyText = text => { globalThis.copiedText = text; }; modal = {type: "paymentGroupSummary", groupId: "summary-group", mode: "reminder"};`);
+  const click = (dataset) => {
+    context.__target = { dataset, disabled: false, closest: () => null };
+    run(context, 'handleClick({target: {matches: () => false, closest: selector => selector === "[data-action]" ? __target : null}})');
+  };
+  click({ action: "set-payment-summary-mode", summaryMode: "advances" });
+  assert.equal(run(context, "modal.mode"), "advances");
+  click({ action: "set-group-advance-summary-mode", summaryMode: "complete" });
+  assert.equal(run(context, "modal.advanceMode"), "complete");
+  click({ action: "copy-payment-group-summary", paymentGroup: "summary-group", summaryMode: "advances", advanceMode: "complete" });
+  assert.equal(run(context, "copiedText"), run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group", "complete")'));
+  click({ action: "set-payment-summary-mode", summaryMode: "summary" });
+  click({ action: "copy-payment-group-summary", paymentGroup: "summary-group", summaryMode: "summary" });
+  assert.equal(run(context, "copiedText"), run(context, 'buildPaymentGroupSummaryCopy("summary-group")'));
+});
+
+test("shared advance adds full taxi payment and shows each member's own usage without double counting", () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-09-20T12:00:00Z");
+  const fixture = groupSummaryFixture(["a", "b"], 20);
+  fixture.players.push(player("owner", "Organizer"));
+  fixture.settings.organizerPlayerId = "owner";
+  fixture.sessions[0].date = "2026-09-18";
+  fixture.activities = [{
+    id: "taxi", name: "Taxi", date: "2026-09-19", totalPaid: 14,
+    paidById: "b", contributions: [{ playerId: "b", amount: 14 }],
+    playerIds: ["a", "b", "owner"], splitMode: "manual", splitValues: { a: 2, b: 2, owner: 10 }
+  }];
+  setAppState(context, fixture);
+  run(context, `
+    const deposit = recordPlayerAdvance("a", 500);
+    deposit.date = "2026-09-19"; deposit.createdAt = "2026-09-19T05:00:00Z";
+    applyPlayerPayment("b", 2);
+  `);
+  const before = jsonValue(context, "state");
+  const expected = jsonValue(context, '({a: playerAdvanceSummary("a"), credit: playerRemainingCredit("b"), due: playerBalance("b")})');
+  assert.deepEqual(expected, { a: {received: 500, deducted: 30, balance: 470}, credit: 0, due: 0 });
+  const copies = [
+    'buildPlayerLatestAdvanceSummaryCopy("a")', 'buildPlayerCompleteAdvanceSummaryCopy("a")',
+    'buildPaymentGroupAdvanceSummaryCopy("summary-group")',
+    'buildPaymentGroupAdvanceSummaryCopy("summary-group", "complete")'
+  ];
+  for (const expression of copies) {
+    const copy = run(context, expression);
+    assert.match(copy, /B paid for Taxi: 14 AED/);
+    assert.match(copy, /Total Advance: 516 AED/);
+    assert.match(copy, /A total: 22 AED/);
+    assert.match(copy, /B total: 22 AED/);
+    assert.match(copy, /Total Used: 44 AED/);
+    assert.match(copy, /Remaining Advance: 472 AED/);
+    assert.doesNotMatch(copy, /Credit|Paid separately|covered directly/);
+    assert.equal((copy.match(/paid for Taxi/g) || []).length, 1);
+    assert.equal((copy.match(/Taxi: 2 AED/g) || []).length, 2);
+    assert.equal((copy.match(/Generated via AD Smashers Manager app/g) || []).length, 1);
+  }
+  const personal = run(context, 'buildPlayerLatestAdvanceSummaryCopy("a")');
+  assert.match(personal, /\*A\*[\s\S]*session: 20 AED[\s\S]*Taxi: 2 AED[\s\S]*\*B\*[\s\S]*session: 20 AED[\s\S]*Taxi: 2 AED/);
+  for (const expression of ['buildPaymentGroupReminderCopy("summary-group")', 'buildPlayerPaymentReminderCopy("b")']) {
+    const reminder = run(context, expression);
+    assert.match(reminder, /Taxi: paid 14 AED added to group Advance/);
+    assert.match(reminder, /Payment received: 2 AED added to group Advance/);
+    assert.doesNotMatch(reminder, /Credit applied|Credit created/);
+  }
+  const html = run(context, 'renderAdvanceDetailsModal("a", "latest")');
+  assert.ok(html.includes(run(context, 'escapeHtml(buildPlayerLatestAdvanceSummaryCopy("a"))')));
+  assert.deepEqual(jsonValue(context, "state"), before);
+  assert.deepEqual(jsonValue(context, '({a: playerAdvanceSummary("a"), credit: playerRemainingCredit("b"), due: playerBalance("b")})'), expected);
+  run(context, 'reversePaymentTransaction(state.paymentTransactions.find(t => t.type === "player-payment").id)');
+  assert.match(run(context, 'buildPlayerLatestAdvanceSummaryCopy("a")'), /Total Advance: 514 AED/);
+  run(context, 'state.activities = []');
+  assert.doesNotMatch(run(context, 'buildPlayerLatestAdvanceSummaryCopy("a")'), /Taxi|Credit created: 12 AED/);
+});
+
+test("latest contribution notes respect own deposit dates and open shared advances for non-depositors", () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-09-20T12:00:00Z");
+  const fixture = groupSummaryFixture(["a", "b", "c"], 10);
+  fixture.sessions = [];
+  fixture.players.push(player("owner", "Organizer"));
+  fixture.settings.organizerPlayerId = "owner";
+  fixture.activities = [
+    ["old", "2026-09-01", "b"], ["b-on", "2026-09-05", "b"],
+    ["b-after", "2026-09-06", "b"], ["c-before", "2026-09-08", "c"], ["c-on", "2026-09-10", "c"]
+  ].map(([name, date, payer]) => ({ id: name, name, date, totalPaid: 6, paidById: payer,
+    contributions: [{playerId: payer, amount: 6}], playerIds: [payer], splitMode: "equal" }));
+  setAppState(context, fixture);
+  run(context, `
+    recordPlayerAdvance("a", 100).date = "2026-09-05";
+    recordPlayerAdvance("a", 200).date = "2026-09-15";
+    recordPlayerAdvance("c", 100).date = "2026-09-10";
+  `);
+  const latest = run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group")');
+  assert.match(latest, /paid for b-on: 6 AED/);
+  assert.match(latest, /paid for b-after: 6 AED/);
+  assert.match(latest, /paid for c-on: 6 AED/);
+  assert.doesNotMatch(latest, /paid for old|paid for c-before/);
+  const complete = run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group", "complete")');
+  assert.doesNotMatch(complete, /paid for old/);
+  assert.match(complete, /paid for c-before: 6 AED/);
+  const reminder = run(context, 'buildPaymentGroupReminderCopy("summary-group")');
+  assert.match(reminder, /b-on: paid 6 AED/);
+  assert.doesNotMatch(reminder, /old: paid|c-before: paid/);
+  // Reversing the most recent own deposit returns the scope to the remaining active deposits.
+  run(context, 'reversePaymentTransaction(state.paymentTransactions.find(t => t.paidById === "c").id)');
+  assert.match(run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group")'), /paid for c-before: 6 AED/);
+});
+
+test("contribution notes use actual multiple payers, exclude reversed Credit and do not invent purchases", () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-09-20T12:00:00Z");
+  const fixture = groupSummaryFixture(["a", "b", "c"]);
+  fixture.sessions = [];
+  fixture.settings.organizerPlayerId = "a";
+  fixture.activities = [{ id: "dinner", name: "Dinner", date: "2026-09-19", totalPaid: 60,
+    contributions: [{playerId: "a", amount: 20}, {playerId: "b", amount: 40}],
+    playerIds: ["a", "c"], splitMode: "equal" }];
+  fixture.advances = { c: 7 };
+  setAppState(context, fixture);
+  run(context, 'recordPlayerAdvance("a", 100).date = "2026-09-18"');
+  const text = run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group")');
+  assert.doesNotMatch(text, /A paid for Dinner/);
+  assert.match(text, /B paid for Dinner: 40 AED/);
+  assert.match(text, /Total Advance: 140 AED/);
+  assert.match(text, /Remaining Advance: 117 AED/);
+  assert.doesNotMatch(text, /Credit created:/);
+  assert.doesNotMatch(text, /Dinner: paid 30 AED|Payment received: 7 AED|Credit created: 7 AED|Payment received: 100 AED/);
+  const sourcesBefore = jsonValue(context, '[...ledgerCoverageSnapshot().players]');
+  run(context, 'buildPlayerCompleteAdvanceSummaryCopy("a"); buildPaymentGroupReminderCopy("summary-group")');
+  assert.deepEqual(jsonValue(context, '[...ledgerCoverageSnapshot().players]'), sourcesBefore);
+});
+
+test("personal complete advance copy groups multi-deposit usage by member once", () => {
+  const context = createAppContext();
+  const fixture = groupSummaryFixture(["a", "b"], 25);
+  fixture.sessions.push(baseSession({ ...fixture.sessions[0], id: "second", date: isoDateFromToday(-2) }));
+  setAppState(context, fixture);
+  run(context, 'recordPlayerAdvance("a", 26); recordPlayerAdvance("a", 100)');
+  const text = run(context, 'buildPlayerCompleteAdvanceSummaryCopy("a")');
+  assert.equal((text.match(/\*A total: 50 AED\*/g) || []).length, 1);
+  assert.equal((text.match(/\*B total: 50 AED\*/g) || []).length, 1);
+  assert.equal((text.match(/session: 25 AED/g) || []).length, 4);
+  assert.match(text, /Total Used: 100 AED/);
+  assert.match(text, /Remaining Advance: 26 AED/);
+  assert.doesNotMatch(text, /session: 1 AED|session: 24 AED/);
+});
+
+test("exhausted shared advances do not convert later cash or activity Credit until a new deposit", () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-09-20T12:00:00Z");
+  const fixture = groupSummaryFixture(["a", "b"], 25);
+  fixture.sessions[0].date = "2026-09-18";
+  fixture.players.push(player("owner", "Organizer"));
+  fixture.settings.organizerPlayerId = "owner";
+  setAppState(context, fixture);
+  run(context, `
+    recordPlayerAdvance("a", 50).date = "2026-09-18";
+    applyPlayerPayment("b", 2);
+    state.activities.push(normalizeActivity({ id: "closed-taxi", name: "Taxi after closure", date: "2026-09-19", totalPaid: 14,
+      contributions: [{playerId: "b", amount: 14}], playerIds: ["b", "owner"], splitMode: "manual", splitValues: {b: 2, owner: 12} }));
+  `);
+  assert.equal(run(context, 'playerRemainingAdvance("a") + playerRemainingAdvance("b")'), 0);
+  assert.equal(run(context, 'playerRemainingCredit("b")'), 14);
+  assert.doesNotMatch(run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group")'), /paid for Taxi after closure/);
+  run(context, `
+    recordPlayerAdvance("a", 100).date = "2026-09-20";
+    state.activities.push(normalizeActivity({ id: "new-taxi", name: "New Taxi", date: "2026-09-20", totalPaid: 14,
+      contributions: [{playerId: "b", amount: 14}], playerIds: ["b", "owner"], splitMode: "manual", splitValues: {b: 2, owner: 12} }));
+  `);
+  const latest = run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group")');
+  assert.match(latest, /paid for New Taxi: 14 AED/);
+  assert.doesNotMatch(latest, /paid for Taxi after closure/);
+  assert.equal(run(context, 'playerRemainingCredit("b")'), 14);
+  assert.equal(run(context, 'playerRemainingAdvance("a") + playerRemainingAdvance("b")'), 112);
+  run(context, 'applyPlayerPayment("b", 3)');
+  assert.equal(run(context, 'playerRemainingAdvance("a") + playerRemainingAdvance("b")'), 115);
+  assert.equal(run(context, 'playerRemainingCredit("b")'), 14);
+});
+
+test("same-day exhausted advance stays closed but an activity can extend a still-positive balance", () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-09-20T12:00:00Z");
+  const fixture = groupSummaryFixture(["a", "b"], 25);
+  fixture.sessions[0].date = "2026-09-19";
+  fixture.players.push(player("owner", "Organizer"));
+  fixture.settings.organizerPlayerId = "owner";
+  setAppState(context, fixture);
+  run(context, `
+    recordPlayerAdvance("a", 50).date = "2026-09-19";
+    state.activities.push(normalizeActivity({id: "taxi", name: "Taxi", date: "2026-09-19", totalPaid: 14,
+      contributions:[{playerId:"b",amount:14}], playerIds:["a","b","owner"],splitMode:"manual",splitValues:{a:2,b:2,owner:10}}));
+  `);
+  assert.equal(run(context, 'playerAdvanceAccountSources("b").length'), 0);
+  run(context, 'state.paymentTransactions[0].amountPaid = 51; state.paymentTransactions[0].allocations[0].amount = 51; state.paymentTransactions[0].advanceAmount = 51');
+  assert.equal(run(context, 'playerAdvanceAccountSources("b").length'), 1);
+  assert.match(run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group")'), /Total Advance: 65 AED[\s\S]*Total Used: 54 AED[\s\S]*Remaining Advance: 11 AED/);
+});
+
+test("shared funding keeps receipts immutable through activity edits deletion reversals and backup reload", () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-09-20T12:00:00Z");
+  const fixture = groupSummaryFixture(["a", "b"], 25);
+  fixture.sessions[0].date = "2026-09-18";
+  fixture.players.push(player("owner", "Organizer"));
+  fixture.settings.organizerPlayerId = "owner";
+  setAppState(context, fixture);
+  run(context, `
+    recordPlayerAdvance("a", 100).date = "2026-09-18";
+    state.activities.push(normalizeActivity({id:"taxi",name:"Taxi",date:"2026-09-19",totalPaid:14,
+      contributions:[{playerId:"b",amount:14}],playerIds:["a","b","owner"],splitMode:"manual",splitValues:{a:2,b:2,owner:10}}));
+  `);
+  const originalReceipt = jsonValue(context, "normalizePaymentTransaction(state.paymentTransactions[0])");
+  const original = run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group")');
+  assert.match(original, /Total Advance: 114 AED[\s\S]*Total Used: 54 AED[\s\S]*Remaining Advance: 60 AED/);
+  run(context, 'state = restoreStateFromBackup(JSON.parse(JSON.stringify(state)))');
+  assert.equal(run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group")'), original);
+  run(context, `
+    const oldActivity = state.activities[0];
+    const editedActivity = normalizeActivity({...oldActivity,totalPaid:21,contributions:[{playerId:"b",amount:21}],splitValues:{a:3,b:3,owner:15}});
+    reconcileActivityFinancials(oldActivity, editedActivity); state.activities[0] = editedActivity;
+  `);
+  assert.match(run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group")'), /Total Advance: 121 AED[\s\S]*Total Used: 56 AED[\s\S]*Remaining Advance: 65 AED/);
+  assert.deepEqual(jsonValue(context, "state.paymentTransactions[0]"), originalReceipt);
+  run(context, 'reconcileActivityFinancials(state.activities[0], null, "activity-delete"); state.activities = []');
+  assert.match(run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group")'), /Total Advance: 100 AED[\s\S]*Total Used: 50 AED[\s\S]*Remaining Advance: 50 AED/);
+  run(context, 'reversePaymentTransaction(state.paymentTransactions[0].id)');
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("summary-group"))'), 50);
+  assert.equal(run(context, 'playerAdvanceAccountSources("b").length'), 0);
+});
+
+test("shared Advance sources conserve money across overlapping groups and partial own contributions", () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-09-20T12:00:00Z");
+  const fixture = groupSummaryFixture(["a", "b", "c"], 25);
+  fixture.sessions[0].date = "2026-09-18";
+  fixture.players.push(player("owner", "Organizer"));
+  fixture.settings.organizerPlayerId = "owner";
+  fixture.paymentGroups.push({id:"other",name:"Other",payerId:"b",playerIds:["b","c"],active:true});
+  setAppState(context, fixture);
+  run(context, `
+    recordPlayerAdvance("a", 100).date = "2026-09-18";
+    state.activities.push(normalizeActivity({id:"meal",name:"Meal",date:"2026-09-19",totalPaid:60,
+      contributions:[{playerId:"b",amount:10},{playerId:"owner",amount:50}],playerIds:["a","b","c"],splitMode:"equal"}));
+  `);
+  const conserved = run(context, `withLedgerCoverageSnapshotCache(() => {
+    const snapshot=ledgerCoverageSnapshot(); let sourceCount=0;
+    snapshot.coverageSourcesByPlayer.forEach((sources,payerId)=>sources.forEach(source=>{
+      if(source.type !== "advance") return;
+      const used=[...snapshot.items.values()].reduce((sum,detail)=>sum+detail.advanceSourceAllocations.filter(a=>a.payerId===payerId&&a.sourceId===source.id).reduce((s,a)=>s+a.amount,0),0);
+      if(ledgerMoney(source.amount-used-Number(source.directUsageAmount||0)-source.remaining)!==0) throw Error("Source counted twice");
+      sourceCount++;
+    }));
+    return sourceCount;
+  })`);
+  assert.equal(conserved, 2);
+  assert.deepEqual(jsonValue(context, 'playerAdvanceSummary("b")'), {received:10,deducted:10,balance:0});
+  assert.equal(run(context, 'playerRemainingCredit("b")'), 0);
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("summary-group"))'), 25);
+  const history = run(context, 'renderAdvanceHistoryModal("b")');
+  assert.match(history, /Meal Payment/);
+  assert.match(history, /open-activity-details/);
+  assert.doesNotMatch(history, /delete-payment-transaction/);
+});
+
+test("shared Advance excludes organizer funding shuttle purchases undated credit and outsider payments", () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-09-20T12:00:00Z");
+  const fixture = groupSummaryFixture(["a", "b"], 25);
+  fixture.sessions = [];
+  fixture.players.push(player("owner", "Organizer"), player("outsider", "Outsider"));
+  fixture.settings.organizerPlayerId = "owner";
+  fixture.advances = {b:7};
+  fixture.activities = [
+    {id:"shuttle",name:"Shuttle purchase",date:"2026-09-19",totalPaid:20,paidById:"b",contributions:[{playerId:"b",amount:20}],playerIds:[],splitMode:"equal"},
+    {id:"meal",name:"Meal",date:"2026-09-19",totalPaid:40,paidById:"outsider",contributions:[{playerId:"outsider",amount:40}],playerIds:["a","b"],splitMode:"equal"}
+  ];
+  setAppState(context, fixture);
+  run(context, 'recordPlayerAdvance("a", 100).date = "2026-09-18"');
+  assert.equal(run(context, 'playerAdvanceAccountSources("b").length'), 0);
+  assert.equal(run(context, 'playerAdvanceAccountSources("outsider").length'), 0);
+  assert.equal(run(context, 'playerRemainingCredit("outsider")'), 40);
+  const text=run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group")');
+  assert.doesNotMatch(text, /paid for Shuttle|Outsider:|paid for Meal/);
+  assert.match(text, /Total Advance: 100 AED/);
 });
 
 test("new session modal defaults from date and selects booking court", () => {
@@ -3776,6 +4353,28 @@ test("player balance rows hide zero credit and label positive credit", () => {
   assert.doesNotMatch(creditHtml, /Advance/);
 });
 
+test("session completion reuses coverage within a check but refreshes it after payment changes", () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-09-20T12:00:00Z");
+  const fixture = groupSummaryFixture(["a", "b"], 25);
+  fixture.sessions[0].date = "2026-09-18";
+  setAppState(context, fixture);
+  run(context, `
+    recordPlayerAdvance("a", 50);
+    ledgerSnapshotBuilds = 0;
+    originalBuildLedgerCoverageSnapshot = buildLedgerCoverageSnapshot;
+    buildLedgerCoverageSnapshot = function () {
+      ledgerSnapshotBuilds += 1;
+      return originalBuildLedgerCoverageSnapshot();
+    };
+  `);
+  assert.equal(run(context, "allSessionPaymentsPaid(state.sessions[0])"), true);
+  assert.equal(run(context, "ledgerSnapshotBuilds"), 1);
+  run(context, "state.paymentTransactions[0].status = 'reversed'");
+  assert.equal(run(context, "allSessionPaymentsPaid(state.sessions[0])"), false);
+  assert.equal(run(context, "ledgerSnapshotBuilds"), 2);
+});
+
 test("authenticated renders build one fresh ledger coverage snapshot", () => {
   const context = createAppContext();
   context.requestAnimationFrame = (callback) => callback();
@@ -3912,7 +4511,7 @@ test("payments page records player advances and copies deduction summary", () =>
   assert.match(latestCopy, /Advance received: 200 AED/);
   assert.match(latestCopy, /Deducted: 20 AED/);
   assert.match(latestCopy, /\*Balance: 180 AED\*/);
-  assert.match(latestCopy, /\*Usage\*[\s\S]*session: 20 AED/);
+  assert.match(latestCopy, /\*Usage by member\*[\s\S]*\*Advance Payer: 20 AED\*[\s\S]*session: 20 AED/);
   assert.match(latestCopy, /_Generated via AD Smashers Manager app\._$/);
 
   const completeCopy = run(context, 'buildPlayerCompleteAdvanceSummaryCopy("payer")');
@@ -4066,8 +4665,17 @@ test("advance summary explains when one item is funded by the prior and latest a
   assert.match(completeCopy, /Total deducted: 124 AED/);
   assert.match(
     completeCopy,
-    /session: 1 AED from this Advance \(24 AED from a later Advance; 25 AED covered by Advances in total\)/
+    /\*Rollover Payer: 124 AED\*[\s\S]*session: 99 AED[\s\S]*session: 25 AED/
   );
+  run(context, 'state.paymentGroups.push({id: "rollover-group", name: "Rollover Group", payerId: "payer", playerIds: ["payer"], active: true})');
+  const groupLatest = run(context, 'buildPaymentGroupAdvanceSummaryCopy("rollover-group")');
+  assert.match(groupLatest, /Total Advance: 200 AED/);
+  assert.match(groupLatest, /\*Rollover Payer total: 24 AED\*/);
+  assert.match(groupLatest, /24 AED from these advances \(1 AED from other advances; 25 AED covered in total\)/);
+  assert.match(groupLatest, /Remaining Advance: 176 AED/);
+  const groupComplete = run(context, 'buildPaymentGroupAdvanceSummaryCopy("rollover-group", "complete")');
+  assert.match(groupComplete, /Total Advance: 300 AED/);
+  assert.match(groupComplete, /\*Rollover Payer total: 124 AED\*/);
 });
 
 test("legacy advance section entries are not double counted as credit", () => {
@@ -4197,8 +4805,8 @@ test("payer Credit automatically covers another payment-group member without bei
   assert.doesNotMatch(groupCardHtml, /Credit applied|Credit owned|Advance applied/);
   const groupSummaryText = run(context, 'buildPaymentGroupSummaryCopy("yogesh-group")');
   assert.match(groupSummaryText, /Credit applied: 80 AED/);
-  assert.match(groupSummaryText, /\*Yogesh - Clear\*[\s\S]*Credit applied: 40 AED/);
-  assert.match(groupSummaryText, /\*Abhineya - Clear\*[\s\S]*Credit applied: 40 AED/);
+  assert.match(groupSummaryText, /\*Total charges: 80 AED\*/);
+  assert.match(groupSummaryText, /\*Remaining due: 0 AED\*/);
   const groupHistoryHtml = run(context, 'renderGroupPaymentHistoryModal("yogesh-group")');
   assert.match(groupHistoryHtml, /No recorded group payment transactions yet/);
   assert.doesNotMatch(groupHistoryHtml, /Current Allocation|Credit owned|Credit applied/);
@@ -4285,8 +4893,8 @@ test("later payer dues do not reclaim Credit already applied to an earlier group
   assert.equal(run(context, 'playerRemainingCredit("payer")'), 0);
   const groupSummaryText = run(context, 'buildPaymentGroupSummaryCopy("yogesh-group")');
   assert.match(groupSummaryText, /Credit applied: 122 AED/);
-  assert.match(groupSummaryText, /\*Yogesh - 8 AED due\*/);
-  assert.match(groupSummaryText, /\*Abhineya - Clear\*/);
+  assert.match(groupSummaryText, /\*Remaining due: 8 AED\*/);
+  assert.match(run(context, 'buildPaymentGroupReminderCopy("yogesh-group")'), /\*Yogesh - 8 AED due\*[\s\S]*\*Abhineya - Clear\*/);
   assert.equal(run(context, 'playerRemainingCredit("member")'), 0);
 });
 
@@ -4449,9 +5057,10 @@ test("payment-group payer Advance covers member dues after the payer's own dues"
   assert.doesNotMatch(run(context, 'renderPaymentGroupCard(getPaymentGroup("yogesh-group"))'), /Advance applied/);
   const groupSummaryText = run(context, 'buildPaymentGroupSummaryCopy("yogesh-group")');
   assert.match(groupSummaryText, /Advance applied: 40 AED/);
-  assert.match(groupSummaryText, /\*Abhineya - Clear\*[\s\S]*Advance applied: 40 AED/);
+  assert.match(groupSummaryText, /\*Remaining due: 0 AED\*/);
+  assert.match(groupSummaryText, /Yogesh - Advance remaining: 42 AED/);
   assert.deepEqual(jsonValue(context, 'playerAdvanceSummary("payer")'), { received: 82, deducted: 40, balance: 42 });
-  assert.match(run(context, 'buildPlayerLatestAdvanceSummaryCopy("payer")'), /session - Abhineya: 40 AED/);
+  assert.match(run(context, 'buildPlayerLatestAdvanceSummaryCopy("payer")'), /\*Abhineya\*[\s\S]*session: 40 AED[\s\S]*\*Abhineya total: 40 AED\*/);
   assert.deepEqual(jsonValue(context, 'applyGroupPayment({ paidById: "payer", playerIds: ["payer", "member"], amountPaid: 0, groupId: "yogesh-group" })'), {
     applied: 0,
     creditUsed: 0,
@@ -4541,7 +5150,8 @@ test("Kuberan backup scenario spends older Credit before newer Advance", () => {
   const kuberanSummaryText = run(context, 'buildPaymentGroupSummaryCopy("kuberan-group")');
   assert.match(kuberanSummaryText, /Advance applied: 145 AED/);
   assert.match(kuberanSummaryText, /Credit applied: 35 AED/);
-  assert.match(kuberanSummaryText, /\*Kalai - Clear\*[\s\S]*Advance applied: 75 AED/);
+  assert.match(kuberanSummaryText, /\*Remaining due: 0 AED\*/);
+  assert.match(kuberanSummaryText, /Kuberan - Advance remaining: 355 AED/);
   assert.match(run(context, 'renderPlayerBalanceRow(getPlayer("kuberan"))'), /Advance 355 AED/);
   assert.doesNotMatch(run(context, 'renderPlayerBalanceRow(getPlayer("kuberan"))'), /Advance 0 AED|Credit 0 AED/);
   const kuberanCardHtml = run(context, 'renderPaymentGroupCard(getPaymentGroup("kuberan-group"))');
@@ -5976,7 +6586,10 @@ test("payment history rows and summary previews stay responsive", () => {
   assert.match(historyRows, /grid-template-columns:\s*minmax\(0,\s*1fr\) auto/);
   assert.doesNotMatch(historyRows, /minmax\(192px,\s*232px\)/);
   assert.match(historyToolbar, /justify-content:\s*flex-end/);
-  assert.match(summaryModes, /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(summaryModes, /grid-template-columns:\s*repeat\(var\(--summary-mode-count, 2\),\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(css, /\.modal-card\.payment-summary-modal\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column/);
+  assert.match(css, /\.payment-summary-modal > :not\(\.payment-summary-preview-shell\)\s*\{[^}]*flex-shrink:\s*0/);
+  assert.match(css, /\.payment-summary-preview-shell\s*\{[^}]*min-height:\s*0/);
   assert.match(summaryPreview, /max-height:\s*min\(52vh,\s*520px\)/);
   assert.match(summaryPreview, /overflow:\s*auto/);
   assert.match(summaryPreview, /overflow-wrap:\s*anywhere/);

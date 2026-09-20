@@ -437,17 +437,20 @@ function renderAdvanceHistoryModal(playerId = "") {
 function renderAdvanceHistoryRow(summary) {
   const isActive = !summary.reversed;
   const canPurge = paymentTransactionCanBePurged(summary.transaction);
+  const activity = summary.activityId ? state.activities.find((item) => item.id === summary.activityId) : null;
   return `
     <article class="row-card payment-transaction-row advance-history-row">
       <div class="row-main">
         <div>
-          <h3 class="row-title">Advance Payment</h3>
+          <h3 class="row-title">${activity ? escapeHtml(activity.name || "Activity") + " Payment" : "Advance Payment"}</h3>
           <p class="row-subtitle">${summary.date ? escapeHtml(formatDate(summary.date)) : "Date not set"} - Advance received ${currency(summary.received)}${isActive ? "" : ", transaction reversed"}</p>
         </div>
         <div class="toolbar nowrap">
           <span class="badge ${isActive ? "green" : "gold"}">${isActive ? currency(summary.received) : "Reversed"}</span>
           ${
-            isActive
+            activity
+              ? `<button class="btn icon-only" type="button" data-action="open-activity-details" data-activity="${escapeAttr(activity.id)}" aria-label="View ${escapeAttr(activity.name || "activity")}" title="View Activity">${icon("eye")}</button>`
+              : isActive && paymentTransactionCanBeReversed(summary.transaction)
               ? `<button class="btn icon-only danger" type="button" data-action="delete-payment-transaction" data-transaction="${escapeAttr(summary.id)}" aria-label="Delete or reverse advance payment" title="Delete or Reverse">${icon("trash")}</button>`
               : canPurge
                 ? `<button class="btn icon-only danger" type="button" data-action="delete-reversed-payment-transaction" data-transaction="${escapeAttr(summary.id)}" aria-label="Permanently delete reversed advance record" title="Delete Reversed Record">${icon("trash")}</button>`

@@ -1399,13 +1399,19 @@ img {
   justify-content: flex-end;
 }
 
-.payment-summary-modal {
+.modal-card.payment-summary-modal {
+  display: flex;
+  flex-direction: column;
   width: min(100%, 720px);
+}
+
+.payment-summary-modal > :not(.payment-summary-preview-shell) {
+  flex-shrink: 0;
 }
 
 .summary-mode-control {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--summary-mode-count, 2), minmax(0, 1fr));
   gap: 4px;
   padding: 4px;
   border: 1px solid var(--line);
@@ -1441,6 +1447,10 @@ img {
 }
 
 .payment-summary-preview-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--line);
@@ -1450,6 +1460,7 @@ img {
 
 .payment-summary-preview-heading {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -1463,6 +1474,7 @@ img {
 }
 
 .payment-summary-preview {
+  min-height: 0;
   max-height: min(52vh, 520px);
   margin: 0;
   padding: 14px;

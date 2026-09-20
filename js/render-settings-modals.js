@@ -183,7 +183,7 @@ function renderModal() {
   if (modalType === "advanceDetails") return renderAdvanceDetailsModal(modalPayload.playerId || modalId, modalPayload.mode || "latest");
   if (modalType === "advanceHistory") return renderAdvanceHistoryModal(modalPayload.playerId || modalId);
   if (modalType === "playerPaymentSummary") return renderPlayerPaymentSummaryModal(modalPayload.playerId || modalId, modalPayload.mode || "reminder");
-  if (modalType === "paymentGroupSummary") return renderPaymentGroupSummaryModal(modalPayload.groupId || modalId, modalPayload.mode || "reminder");
+  if (modalType === "paymentGroupSummary") return renderPaymentGroupSummaryModal(modalPayload.groupId || modalId, modalPayload.mode || "reminder", modalPayload.advanceMode || "latest");
   if (modalType === "partialPayment") return renderPartialPaymentModal(modalPayload.sessionId || modalId, modalPayload.playerId);
   if (modalType === "confirmDelete") return renderDeleteConfirmModal(modalPayload);
   if (modalType === "court") return renderCourtModal(modalId);
@@ -324,11 +324,11 @@ function renderPlayerPaymentTransactionItem(playerId, transaction) {
   `;
 }
 
-function renderPaymentSummaryModeControl(options, activeMode) {
+function renderPaymentSummaryModeControl(options, activeMode, action = "set-payment-summary-mode") {
   return `
-    <div class="summary-mode-control" role="tablist" aria-label="Summary type">
+    <div class="summary-mode-control" style="--summary-mode-count: ${options.length}" role="tablist" aria-label="Summary type">
       ${options.map((option) => `
-        <button class="summary-mode-option ${option.value === activeMode ? "active" : ""}" type="button" role="tab" aria-selected="${option.value === activeMode ? "true" : "false"}" data-action="set-payment-summary-mode" data-summary-mode="${escapeAttr(option.value)}">
+        <button class="summary-mode-option ${option.value === activeMode ? "active" : ""}" type="button" role="tab" aria-selected="${option.value === activeMode ? "true" : "false"}" data-action="${escapeAttr(action)}" data-summary-mode="${escapeAttr(option.value)}">
           ${escapeHtml(option.label)}
         </button>
       `).join("")}
@@ -379,13 +379,15 @@ function renderPlayerPaymentSummaryModal(playerId = "", mode = "reminder") {
   `;
 }
 
-function renderPaymentGroupSummaryModal(groupId = "", mode = "reminder") {
+function renderPaymentGroupSummaryModal(groupId = "", mode = "reminder", advanceMode = "latest") {
   const group = getPaymentGroup(groupId);
-  const activeMode = mode === "reminder" ? "reminder" : "summary";
+  const hasAdvances = Boolean(group && paymentGroupAdvancePlayerIds(group).length);
+  const activeMode = mode === "advances" && hasAdvances ? "advances" : mode === "reminder" ? "reminder" : "summary";
+  const activeAdvanceMode = advanceMode === "complete" ? "complete" : "latest";
   const summaryText = activeMode === "reminder"
     ? buildPaymentGroupReminderCopy(groupId)
-    : buildPaymentGroupSummaryCopy(groupId);
-  const copyLabel = activeMode === "reminder" ? "Copy Reminder" : "Copy Summary";
+    : activeMode === "advances" ? buildPaymentGroupAdvanceSummaryCopy(groupId, activeAdvanceMode) : buildPaymentGroupSummaryCopy(groupId);
+  const copyLabel = activeMode === "reminder" ? "Copy Reminder" : activeMode === "advances" ? (activeAdvanceMode === "complete" ? "Copy Complete Summary" : "Copy Latest Advances") : "Copy Summary";
   return `
     <div class="modal-backdrop" data-modal-backdrop>
       <div class="modal-card payment-summary-modal" role="dialog" aria-modal="true" aria-labelledby="payment-group-copy-title">
@@ -398,11 +400,16 @@ function renderPaymentGroupSummaryModal(groupId = "", mode = "reminder") {
         </div>
         ${renderPaymentSummaryModeControl([
           { value: "reminder", label: "Due Reminder" },
-          { value: "summary", label: "Summary" }
+          { value: "summary", label: "Summary" },
+          ...(hasAdvances ? [{ value: "advances", label: "Advances" }] : [])
         ], activeMode)}
+        ${activeMode === "advances" ? renderPaymentSummaryModeControl([
+          { value: "latest", label: "Latest Advances" },
+          { value: "complete", label: "Complete Summary" }
+        ], activeAdvanceMode, "set-group-advance-summary-mode") : ""}
         ${renderPaymentSummaryPreview(summaryText, `${group?.name || "Payment group"} ${activeMode}`)}
         <div class="toolbar nowrap confirm-actions payment-summary-copy-actions">
-          <button class="btn primary" type="button" data-action="copy-payment-group-summary" data-payment-group="${escapeAttr(groupId)}" data-summary-mode="${escapeAttr(activeMode)}">${copyLabel}</button>
+          <button class="btn primary" type="button" data-action="copy-payment-group-summary" data-payment-group="${escapeAttr(groupId)}" data-summary-mode="${escapeAttr(activeMode)}" data-advance-mode="${escapeAttr(activeAdvanceMode)}">${copyLabel}</button>
         </div>
       </div>
     </div>
