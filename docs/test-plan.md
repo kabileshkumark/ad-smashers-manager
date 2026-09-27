@@ -22,6 +22,17 @@ The test suite uses Node's built-in test runner and does not require extra packa
 
 ## Current Automated Coverage
 
+### Compact Individual Reminders (Build 1.0.19)
+
+- One unpaid session produces only the title, dated charge, Amount Due, payment instructions and automated-message footer. No empty Contributions, duplicate name, member subtotal, From date or duplicate usage total.
+- Multiple unpaid items retain the last-cleared-period scope, every usage line and Total Used. Multiple contributions retain attribution and Total Contributions.
+- Carried Credit can leave either a smaller due or Credit Remaining; no payment request is shown when nothing is due. Guest places and shared funding retain their context.
+- Group reminders, including one-member groups, retain the detailed layout. Full summaries and Advance summaries change only their shared footer wording.
+- Preview and Copy Reminder produce identical text. Repeated generation does not mutate state or financial coverage.
+- Local replay of the owner-provided export compares every player's balance and ledger totals against the prior release without production writes. Keep the export outside Git and Hosting.
+
+### Core Regression Coverage
+
 The regression suite in `tests/regression.test.js` loads the same browser JavaScript files used by the app and checks these critical rules:
 
 - Session date routing picks the correct WhatsApp group:

@@ -2041,7 +2041,7 @@ function buildPlayerCompleteAdvanceCopy(playerId) {
   return finishPaymentSummaryCopy(lines);
 }
 
-const PAYMENT_SUMMARY_DISCLAIMER = "_Generated via AD Smashers Manager app._";
+const PAYMENT_SUMMARY_DISCLAIMER = "_This is an automated message generated via AD Smashers Manager app._";
 const PAYMENT_REMINDER_INSTRUCTIONS = "Please share the payment via Aani. If not available, DM me for A/C details.";
 
 function finishPaymentSummaryCopy(lines) {
@@ -2211,7 +2211,7 @@ function paymentReminderPeriod(chargeItems, funding) {
   return { items, contributions, startDate };
 }
 
-function buildPaymentDueStatementCopy(name, playerIds, snapshot, memberNames = "") {
+function buildPaymentDueStatementCopy(name, playerIds, snapshot, { memberNames = "", individual = false } = {}) {
   const chargeItems = paymentSummaryChargeItems(playerIds, { includeDirectActivityPayments: true });
   const { items, contributions, startDate } = paymentReminderPeriod(chargeItems, paymentReminderFunding(playerIds, snapshot, chargeItems));
   const totalContributions = ledgerMoney(contributions.reduce((sum, row) => sum + row.amount, 0));
@@ -2220,21 +2220,25 @@ function buildPaymentDueStatementCopy(name, playerIds, snapshot, memberNames = "
   const due = coverage.balance;
   const lines = [`*Payment Reminder - ${name}*`];
   if (memberNames) lines.push(`Members: ${memberNames}`);
-  if (startDate) lines.push(`From: ${formatDate(startDate)}`);
-  lines.push("", "*Contributions*");
-  if (!contributions.length) lines.push("No contributions for this period.");
+  if (!individual && startDate) lines.push(`From: ${formatDate(startDate)}`);
+  if (!individual || contributions.length) lines.push("", "*Contributions*");
+  if (!individual && !contributions.length) lines.push("No contributions for this period.");
   contributions.forEach((row) => {
     const date = row.date ? `${formatDate(row.date)} - ` : "";
     const description = row.description ? ` - ${row.description}` : "";
     const owner = row.payerId ? getPlayerName(row.payerId) : `For ${getPlayerName(row.playerId)}`;
     lines.push(`- ${date}${owner}${description} (${row.type}${row.carriedForward ? " carried forward" : ""}): ${currency(row.amount)}`);
   });
-  lines.push("", `*Total Contributions: ${currency(totalContributions)}*`, "", "*Usage by member*");
+  if (!individual || contributions.length > 1) lines.push("", `*Total Contributions: ${currency(totalContributions)}*`);
+  if (!individual) lines.push("", "*Usage by member*");
+  let usageCount = 0;
   playerIds.forEach((playerId) => {
     let total = 0;
-    lines.push("", `*${getPlayerName(playerId)}*`);
+    lines.push("");
+    if (!individual) lines.push(`*${getPlayerName(playerId)}*`);
     const usage = items.flatMap((item) => item.charges.filter((charge) => charge.playerId === playerId && charge.amount > 0)
       .map((charge) => ({ item, charge })));
+    usageCount += usage.length;
     if (!usage.length) lines.push("No chargeable usage.");
     usage.forEach(({ item, charge }) => {
       total = ledgerMoney(total + charge.amount);
@@ -2242,9 +2246,10 @@ function buildPaymentDueStatementCopy(name, playerIds, snapshot, memberNames = "
         : charge.allocatedAmount !== undefined && charge.allocatedAmount !== charge.amount ? " (net payable to organizer)" : "";
       lines.push(`- ${item.date ? formatDate(item.date) : "Date not set"} ${item.label}: ${currency(charge.amount)}${context}`);
     });
-    lines.push(`*${getPlayerName(playerId)} total: ${currency(total)}*`);
+    if (!individual) lines.push(`*${getPlayerName(playerId)} total: ${currency(total)}*`);
   });
-  lines.push("", `*Total Used: ${currency(totalUsed)}*`);
+  lines.push("");
+  if (!individual || usageCount > 1) lines.push(`*Total Used: ${currency(totalUsed)}*`);
   if (due > 0 || (coverage.remainingCredit <= 0 && coverage.remainingAdvance <= 0)) lines.push(`*Amount Due: ${currency(due)}*`);
   if (coverage.remainingCredit > 0) lines.push(`*Credit Remaining: ${currency(coverage.remainingCredit)}*`);
   if (coverage.remainingAdvance > 0) lines.push(`*Remaining Advance: ${currency(coverage.remainingAdvance)}*`);
@@ -2344,7 +2349,7 @@ function buildPlayerCurrentPaymentCopy(playerId, type = "summary") {
   if (!player) return "Player not found.";
   const playerName = player.name || player.displayName || "Player";
   const snapshot = ledgerCoverageSnapshot();
-  if (type === "reminder") return buildPaymentDueStatementCopy(playerName, [playerId], snapshot);
+  if (type === "reminder") return buildPaymentDueStatementCopy(playerName, [playerId], snapshot, { individual: true });
   const coverage = paymentSummaryCoverage([playerId], snapshot);
   const pendingItems = playerPendingPaymentItems(playerId, snapshot);
   const title = type === "reminder" ? "Payment Reminder" : "Payment Summary";
@@ -2502,7 +2507,7 @@ function buildPaymentGroupCurrentCopy(groupId = "", type = "summary") {
   const snapshot = ledgerCoverageSnapshot();
   if (type === "summary") return buildPaymentGroupFullSummaryCopy(group, snapshot);
   const playerIds = paymentGroupSummaryPlayerIds(group);
-  return buildPaymentDueStatementCopy(group.name || "Payment Group", playerIds, snapshot, paymentGroupMemberNames(group));
+  return buildPaymentDueStatementCopy(group.name || "Payment Group", playerIds, snapshot, { memberNames: paymentGroupMemberNames(group) });
 }
 
 function buildPlayerPaymentSummaryCopy(playerId) {
