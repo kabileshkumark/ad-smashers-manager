@@ -68,6 +68,17 @@ Group rules:
 - Latest Advances uses each depositor's latest deposit and qualifying subsequent contributions. Non-depositors follow the open shared cycle. Earlier unused balances and split-deposit usage remain visible; Complete Summary includes all active sources.
 - Statements list contributions, total Advance, individual usage items grouped by member, total used, remaining Advance and dues. Receipt and activity history remain the audit source.
 
+## Current Due Statement
+
+- Player and group Due Reminders use Contributions, Total Contributions, Usage by member, member totals and Total Used, followed by Amount Due, Credit Remaining and/or Remaining Advance as applicable.
+- The report starts with usage after the previous cleared period. When earlier dues remain open, retain that period's usage and contributions. A payment received after multiple charges must not hide older usage merely because it settled the oldest item first.
+- Earlier unused Credit or Advance is carried forward, attributed to its owner, and counted once alongside this period's payments. Personal statements include only funds applied to that player and unused funds they own, not another member's unused balance.
+- Canonical source allocations and current recorded settlements determine the display. Same-day events are grouped at stored-date granularity; undated legacy settlements use the neutral Recorded settlement label. There is no new stored reporting ledger.
+- Activity contributions and already-covered own shares appear once on opposite sides of the statement. Reversal may reopen the earlier report period. Summary generation remains read-only.
+- Conservation: Total Used minus Total Contributions equals Amount Due minus Credit Remaining minus Remaining Advance. Separate personal Credit is not silently netted against another member's due; both values remain visible when necessary.
+- A positive Amount Due includes the Aani/DM payment instructions. Clear or surplus-only statements do not ask for payment. All retain the generated-via-app footer.
+- The full Summary, Latest Advances, Complete Advance Summary and transaction-only history keep their existing purposes and scopes.
+
 ## Activity Settlement Contract
 
 Activities use the Organizer selected in Settings as the settlement owner. That player is snapshotted on the activity so a later Settings change does not rewrite historical responsibility.

@@ -1495,10 +1495,11 @@ test("payment summary previews use current ledger totals and keep history transa
 
   const dueText = run(context, 'buildPlayerPaymentReminderCopy("p1")');
   assert.match(dueText, /\*Payment Reminder - Aishu\*/);
-  assert.match(dueText, /Due before adjustments: 40 AED/);
-  assert.match(dueText, /\*Amount due: 35 AED\*/);
-  assert.match(dueText, /Dinner: 10 AED/);
-  assert.doesNotMatch(dueText, /Payments from the start|Aishu paid 10 AED|Kabilesh paid 15 AED/);
+  assert.match(dueText, /\*Contributions\*/);
+  assert.match(dueText, /\*Usage by member\*/);
+  assert.match(dueText, /\*Amount Due: 35 AED\*/);
+  assert.match(dueText, /Dinner: 15 AED/);
+  assert.doesNotMatch(dueText, /Payments from the start|Pending items|Due before adjustments/);
   assert.match(dueText, /_Generated via AD Smashers Manager app\._$/);
 
   const modalHtml = run(context, 'renderPlayerPaymentSummaryModal("p1")');
@@ -1543,7 +1544,8 @@ test("payment summary previews use current ledger totals and keep history transa
 
   const groupReminder = run(context, 'buildPaymentGroupReminderCopy("copy-group")');
   assert.match(groupReminder, /\*Payment Reminder - Aishu Group\*/);
-  assert.match(groupReminder, /\*Aishu - 35 AED due\*/);
+  assert.match(groupReminder, /\*Aishu\*/);
+  assert.match(groupReminder, /\*Amount Due: 35 AED\*/);
   assert.doesNotMatch(groupReminder, /Payments from the start|Kabilesh paid 15 AED/);
   assert.match(groupReminder, /_Generated via AD Smashers Manager app\._$/);
 
@@ -1571,6 +1573,252 @@ function groupSummaryFixture(ids = ["a", "b", "c"], rate = 100) {
   });
 }
 
+function duePeriodFixture() {
+  const fixture = groupSummaryFixture(["a"], 100);
+  fixture.sessions[0].id = "last-week";
+  fixture.sessions[0].date = "2026-09-18";
+  fixture.sessions[0].type = "Last week";
+  return fixture;
+}
+
+function addThisWeekSession(context) {
+  installFakeDate(context, "2026-09-27T12:00:00Z");
+  run(context, `
+    state.sessions[0].type = "Last week";
+    const nextSession = JSON.parse(JSON.stringify(state.sessions[0]));
+    nextSession.id = "this-week";
+    nextSession.date = "2026-09-25";
+    nextSession.type = "This week";
+    nextSession.payments = {};
+    state.sessions.push(nextSession);
+    syncSessionPayments(nextSession);
+  `);
+}
+
+function assertDueStatementReconciles(context, playerIds) {
+  const totals = jsonValue(context, `(() => {
+    const ids = ${JSON.stringify(playerIds)};
+    const snapshot = ledgerCoverageSnapshot();
+    const charges = paymentSummaryChargeItems(ids, { includeDirectActivityPayments: true });
+    const period = paymentReminderPeriod(charges, paymentReminderFunding(ids, snapshot, charges));
+    const coverage = paymentSummaryCoverage(ids, snapshot);
+    return {
+      used: ledgerMoney(period.items.reduce((sum, item) => sum + item.charges.reduce((sub, charge) => sub + charge.amount, 0), 0)),
+      contributed: ledgerMoney(period.contributions.reduce((sum, row) => sum + row.amount, 0)),
+      due: coverage.balance, credit: coverage.remainingCredit, advance: coverage.remainingAdvance
+    };
+  })()`);
+  assert.equal(Number((totals.used - totals.contributed).toFixed(2)), Number((totals.due - totals.credit - totals.advance).toFixed(2)));
+}
+
+test("due statement starts after the last cleared period and uses the advance statement order", () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-09-19T12:00:00Z");
+  setAppState(context, duePeriodFixture());
+  run(context, 'applyPlayerPayment("a", 100)');
+  addThisWeekSession(context);
+  const before = jsonValue(context, "state");
+  for (const expression of ['buildPlayerPaymentReminderCopy("a")', 'buildPaymentGroupReminderCopy("summary-group")']) {
+    const text = run(context, expression);
+    assert.match(text, /From: Fri, Sep 25/);
+    assert.doesNotMatch(text, /Last week|Sep 18|\(Payment\): 100 AED/);
+    assert.match(text, /This week session: 100 AED/);
+    assert.match(text, /Total Contributions: 0 AED/);
+    assert.match(text, /Total Used: 100 AED/);
+    assert.match(text, /Amount Due: 100 AED/);
+    const sections = ["*Contributions*", "*Total Contributions:", "*Usage by member*", "*A total:", "*Total Used:", "*Amount Due:"];
+    sections.forEach((section, index) => { if (index) assert.ok(text.indexOf(sections[index - 1]) < text.indexOf(section)); });
+  }
+  assertDueStatementReconciles(context, ["a"]);
+  assert.deepEqual(jsonValue(context, "state"), before);
+  assert.match(run(context, 'buildPaymentGroupSummaryCopy("summary-group")'), /Last week session[\s\S]*This week session/);
+});
+
+test("due statement retains earlier usage when a later partial payment never cleared the running due", () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-09-26T12:00:00Z");
+  setAppState(context, duePeriodFixture());
+  addThisWeekSession(context);
+  run(context, 'applyPlayerPayment("a", 100)');
+  const text = run(context, 'buildPaymentGroupReminderCopy("summary-group")');
+  assert.match(text, /From: Fri, Sep 18/);
+  assert.match(text, /Last week session: 100 AED[\s\S]*This week session: 100 AED/);
+  assert.match(text, /A \(Payment\): 100 AED/);
+  assert.match(text, /Total Used: 200 AED[\s\S]*Amount Due: 100 AED/);
+  assertDueStatementReconciles(context, ["a"]);
+});
+
+test("last week's extra payment is carried into this period with either remaining due or Credit", () => {
+  for (const [paid, credit, due] of [[150, 0, 50], [250, 50, 0]]) {
+    const context = createAppContext();
+    installFakeDate(context, "2026-09-19T12:00:00Z");
+    setAppState(context, duePeriodFixture());
+    run(context, `applyPlayerPayment("a", ${paid})`);
+    addThisWeekSession(context);
+    const before = jsonValue(context, "state");
+    const text = run(context, 'buildPaymentGroupReminderCopy("summary-group")');
+    assert.match(text, /From: Fri, Sep 25/);
+    assert.doesNotMatch(text, /Last week session|\(Payment\)/);
+    assert.ok(text.includes(`A (Credit carried forward): ${paid - 100} AED`));
+    assert.match(text, /Total Used: 100 AED/);
+    if (due) {
+      assert.match(text, /Amount Due: 50 AED/);
+      assert.match(text, /Aani/);
+      assert.doesNotMatch(text, /Credit Remaining/);
+    } else {
+      assert.match(text, /Credit Remaining: 50 AED/);
+      assert.doesNotMatch(text, /Amount Due:|Aani/);
+    }
+    assert.equal(run(context, 'playerRemainingCredit("a")'), credit);
+    assert.equal(run(context, 'playerBalance("a")'), due);
+    assertDueStatementReconciles(context, ["a"]);
+    assert.deepEqual(jsonValue(context, "state"), before);
+  }
+});
+
+test("reversing a clearing payment reopens the earlier due period", () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-09-19T12:00:00Z");
+  setAppState(context, duePeriodFixture());
+  run(context, 'applyPlayerPayment("a", 100)');
+  addThisWeekSession(context);
+  assert.doesNotMatch(run(context, 'buildPlayerPaymentReminderCopy("a")'), /Last week session/);
+  run(context, 'reversePaymentTransaction(state.paymentTransactions[0].id)');
+  const text = run(context, 'buildPlayerPaymentReminderCopy("a")');
+  assert.match(text, /Last week session: 100 AED[\s\S]*This week session: 100 AED/);
+  assert.match(text, /Amount Due: 200 AED/);
+  assert.doesNotMatch(text, /\(Payment\)/);
+  assertDueStatementReconciles(context, ["a"]);
+});
+
+test("due statement does not silently net a non-payer's personal Credit against another member's due", () => {
+  const context = createAppContext();
+  setAppState(context, { ...groupSummaryFixture(["a", "b"], 100), advances: { b: 150 } });
+  const text = run(context, 'buildPaymentGroupReminderCopy("summary-group")');
+  assert.match(text, /Total Used: 200 AED/);
+  assert.match(text, /Total Contributions: 150 AED/);
+  assert.match(text, /Amount Due: 100 AED/);
+  assert.match(text, /Credit Remaining: 50 AED/);
+  assertDueStatementReconciles(context, ["a", "b"]);
+  const personal = run(context, 'buildPlayerPaymentReminderCopy("a")');
+  assert.doesNotMatch(personal, /B \(Credit|Credit Remaining/);
+});
+
+test("due-period totals reconcile across repeated payments, advances and group members", () => {
+  for (const amount of [0, 25, 100, 200, 250, 500]) {
+    for (const advance of [false, true]) {
+      const context = createAppContext();
+      installFakeDate(context, "2026-09-19T12:00:00Z");
+      const fixture = groupSummaryFixture(["a", "b"], 100);
+      fixture.sessions[0].date = "2026-09-18";
+      setAppState(context, fixture);
+      if (amount) run(context, advance
+        ? `recordPlayerAdvance("b", ${amount})`
+        : `applyGroupPayment({paidById:"a",playerIds:["a","b"],amountPaid:${amount},groupId:"summary-group"})`);
+      addThisWeekSession(context);
+      run(context, 'applyPlayerPayment("b", 15)');
+      const before = jsonValue(context, "state");
+      for (const ids of [["a"], ["b"], ["a", "b"]]) assertDueStatementReconciles(context, ids);
+      assert.deepEqual(jsonValue(context, "state"), before);
+    }
+  }
+});
+
+test("due reminder contributions combine applied Advance and Credit without changing accounting", () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-09-27T12:00:00Z");
+  const fixture = groupSummaryFixture(["a", "b", "c"], 100);
+  fixture.sessions[0].date = "2026-09-25";
+  fixture.advances = { a: 75 };
+  setAppState(context, fixture);
+  run(context, 'recordPlayerAdvance("b", 50)');
+  const before = jsonValue(context, "state");
+  const ledgerBefore = jsonValue(context, "[...buildLedgerCoverageSnapshot().players]");
+  const group = run(context, 'buildPaymentGroupReminderCopy("summary-group")');
+  assert.match(group, /Total Used: 300 AED/);
+  assert.match(group, /\*Contributions\*[\s\S]*A \(Credit carried forward\): 75 AED[\s\S]*B \(Advance\): 50 AED/);
+  assert.match(group, /Total Contributions: 125 AED/);
+  assert.match(group, /\*Amount Due: 175 AED\*/);
+  assert.doesNotMatch(group, /Credit applied:|Advance applied:|Credit created:/);
+  const personal = run(context, 'buildPlayerPaymentReminderCopy("a")');
+  assert.match(personal, /A \(Credit carried forward\): 75 AED/);
+  assert.match(personal, /B \(Advance\): 25 AED/);
+  assert.match(personal, /Total Contributions: 100 AED/);
+  assert.match(personal, /Amount Due: 0 AED/);
+  assert.doesNotMatch(personal, /Aani/);
+  assert.deepEqual(jsonValue(context, "state"), before);
+  assert.deepEqual(jsonValue(context, "[...buildLedgerCoverageSnapshot().players]"), ledgerBefore);
+  assert.match(run(context, 'buildPaymentGroupSummaryCopy("summary-group")'), /Credit applied: 75 AED/);
+});
+
+test("reminder scopes applied Credit to recipients and shows unused Credit only for its owner", () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-09-27T12:00:00Z");
+  const fixture = groupSummaryFixture(["a", "b"], 25);
+  fixture.sessions[0].date = "2026-09-25";
+  fixture.advances = { a: 100 };
+  setAppState(context, fixture);
+  const group = run(context, 'buildPaymentGroupReminderCopy("summary-group")');
+  assert.match(group, /A \(Credit carried forward\): 100 AED/);
+  assert.match(group, /Total Contributions: 100 AED/);
+  assert.match(group, /Credit Remaining: 50 AED/);
+  assert.doesNotMatch(group, /Aani/);
+  const member = run(context, 'buildPlayerPaymentReminderCopy("b")');
+  assert.match(member, /A \(Credit carried forward\): 25 AED/);
+  assert.doesNotMatch(member, /B \(Credit|Credit Remaining/);
+  run(context, 'state.advances = {}');
+  const after = run(context, 'buildPaymentGroupReminderCopy("summary-group")');
+  assert.doesNotMatch(after, /\(Credit\)/);
+  assert.match(after, /No contributions for this period/);
+  assert.match(after, /Total Contributions: 0 AED/);
+  assert.match(after, /Amount Due: 50 AED/);
+  assert.match(after, /Aani/);
+});
+
+test("activity Credit keeps its payer and activity label in due reminder contributions", () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-09-27T12:00:00Z");
+  const fixture = groupSummaryFixture(["a", "b"], 100);
+  fixture.sessions[0].date = "2026-09-25";
+  fixture.players.push(player("owner", "Organizer"));
+  fixture.settings.organizerPlayerId = "owner";
+  fixture.activities = [{id:"taxi",name:"Taxi",date:"2026-09-26",totalPaid:60,paidById:"a",contributions:[{playerId:"a",amount:60}],playerIds:["a","b","owner"],splitMode:"equal"}];
+  setAppState(context, fixture);
+  const text = run(context, 'buildPaymentGroupReminderCopy("summary-group")');
+  assert.match(text, /A - Taxi \(Credit\): 40 AED/);
+  assert.match(text, /A - Taxi \(Activity payment\): 20 AED/);
+  assert.match(text, /Total Contributions: 60 AED/);
+  assert.doesNotMatch(text, /Taxi \(Credit\): 60 AED|Credit applied:|Credit created:/);
+  assert.doesNotMatch(text, /Taxi: paid 60 AED|Own share:|Member payments/);
+  assert.match(text, /Taxi: 20 AED/);
+  assert.match(text, /Total Used: 240 AED/);
+  assert.match(text, /Amount Due: 180 AED/);
+});
+
+test("due reminders include Aani instructions once only when payment is due", () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-09-27T12:00:00Z");
+  const fixture = groupSummaryFixture(["a", "b"], 25);
+  fixture.sessions[0].date = "2026-09-25";
+  setAppState(context, fixture);
+  const instructions = "Please share the payment via Aani. If not available, DM me for A/C details.";
+  const disclaimer = "_Generated via AD Smashers Manager app._";
+  for (const expression of ['buildPlayerPaymentReminderCopy("a")', 'buildPaymentGroupReminderCopy("summary-group")']) {
+    const text = run(context, expression);
+    assert.equal(text.split(instructions).length - 1, 1);
+    assert.ok(text.endsWith(`${instructions}\n\n${disclaimer}`));
+  }
+  for (const expression of ['buildPlayerPaymentSummaryCopy("a")', 'buildPaymentGroupSummaryCopy("summary-group")']) {
+    assert.doesNotMatch(run(context, expression), /Aani|A\/C details/);
+  }
+  run(context, 'recordPlayerAdvance("a", 50)');
+  for (const expression of ['buildPlayerPaymentReminderCopy("a")', 'buildPaymentGroupReminderCopy("summary-group")', 'buildPaymentGroupAdvanceSummaryCopy("summary-group")']) {
+    const text = run(context, expression);
+    assert.doesNotMatch(text, /Aani|A\/C details/);
+    assert.ok(text.endsWith(disclaimer));
+  }
+});
+
 test("group summary separates rates, total, payer receipts and remaining due without changing allocations", () => {
   const context = createAppContext();
   setAppState(context, groupSummaryFixture());
@@ -1588,8 +1836,8 @@ test("group summary separates rates, total, payer receipts and remaining due wit
   assert.doesNotMatch(text, /By member|75 AED due|Pending items|Advance applied|Credit applied/);
   assert.deepEqual(jsonValue(context, "state"), before);
   const reminder = run(context, 'buildPaymentGroupReminderCopy("summary-group")');
-  assert.match(reminder, /By member/);
-  assert.match(reminder, /\*Total due: 225 AED\*/);
+  assert.match(reminder, /Usage by member/);
+  assert.match(reminder, /\*Amount Due: 225 AED\*/);
 
   run(context, 'applyGroupPayment({ paidById: "b", playerIds: ["b"], amountPaid: 25 })');
   const multiple = run(context, 'buildPaymentGroupSummaryCopy("summary-group")');
@@ -1909,10 +2157,13 @@ test("shared advance adds full taxi payment and shows each member's own usage wi
   assert.match(personal, /\*A\*[\s\S]*session: 20 AED[\s\S]*Taxi: 2 AED[\s\S]*\*B\*[\s\S]*session: 20 AED[\s\S]*Taxi: 2 AED/);
   for (const expression of ['buildPaymentGroupReminderCopy("summary-group")', 'buildPlayerPaymentReminderCopy("b")']) {
     const reminder = run(context, expression);
-    assert.match(reminder, /Taxi: paid 14 AED added to group Advance/);
-    assert.match(reminder, /Payment received: 2 AED added to group Advance/);
+    assert.ok(reminder.includes(`B - Taxi (Advance): ${expression.includes('GroupReminder') ? 14 : 2} AED`));
+    assert.match(reminder, /B \(Advance\): 2 AED/);
+    assert.match(reminder, /Remaining Advance:/);
     assert.doesNotMatch(reminder, /Credit applied|Credit created/);
   }
+  assertDueStatementReconciles(context, ["a", "b"]);
+  assertDueStatementReconciles(context, ["b"]);
   const html = run(context, 'renderAdvanceDetailsModal("a", "latest")');
   assert.ok(html.includes(run(context, 'escapeHtml(buildPlayerLatestAdvanceSummaryCopy("a"))')));
   assert.deepEqual(jsonValue(context, "state"), before);
@@ -1950,8 +2201,9 @@ test("latest contribution notes respect own deposit dates and open shared advanc
   assert.doesNotMatch(complete, /paid for old/);
   assert.match(complete, /paid for c-before: 6 AED/);
   const reminder = run(context, 'buildPaymentGroupReminderCopy("summary-group")');
-  assert.match(reminder, /b-on: paid 6 AED/);
-  assert.doesNotMatch(reminder, /old: paid|c-before: paid/);
+  assert.match(reminder, /Usage by member/);
+  assert.match(reminder, /Remaining Advance: 400 AED/);
+  assert.doesNotMatch(reminder, /old: paid|c-before: paid|b-on: paid/);
   // Reversing the most recent own deposit returns the scope to the remaining active deposits.
   run(context, 'reversePaymentTransaction(state.paymentTransactions.find(t => t.paidById === "c").id)');
   assert.match(run(context, 'buildPaymentGroupAdvanceSummaryCopy("summary-group")'), /paid for c-before: 6 AED/);
@@ -4894,7 +5146,9 @@ test("later payer dues do not reclaim Credit already applied to an earlier group
   const groupSummaryText = run(context, 'buildPaymentGroupSummaryCopy("yogesh-group")');
   assert.match(groupSummaryText, /Credit applied: 122 AED/);
   assert.match(groupSummaryText, /\*Remaining due: 8 AED\*/);
-  assert.match(run(context, 'buildPaymentGroupReminderCopy("yogesh-group")'), /\*Yogesh - 8 AED due\*[\s\S]*\*Abhineya - Clear\*/);
+  const reminder = run(context, 'buildPaymentGroupReminderCopy("yogesh-group")');
+  assert.match(reminder, /\*Yogesh\*[\s\S]*\*Abhineya\*/);
+  assert.match(reminder, /Amount Due: 8 AED/);
   assert.equal(run(context, 'playerRemainingCredit("member")'), 0);
 });
 
