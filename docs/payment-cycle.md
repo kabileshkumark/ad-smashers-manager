@@ -1,6 +1,6 @@
 # Payment Lifecycle and Ledger Invariants
 
-**Status:** Owner-approved rule set for technical build 1.0.17; deployment evidence is maintained with the release record.
+**Status:** Owner-approved rule set through technical build 1.0.19; deployment evidence is maintained with the release record.
 
 **Formal release:** Version 1.0
 
@@ -70,13 +70,14 @@ Group rules:
 
 ## Current Due Statement
 
-- Player and group Due Reminders use Contributions, Total Contributions, Usage by member, member totals and Total Used, followed by Amount Due, Credit Remaining and/or Remaining Advance as applicable.
+- Group Due Reminders use Contributions, Total Contributions, Usage by member, member totals and Total Used, followed by Amount Due, Credit Remaining and/or Remaining Advance as applicable. A one-member saved group retains this detailed group layout.
+- Individual Due Reminders list dated usage and the final balance without repeating the player's name, a From date, or member subtotals. Empty Contributions are omitted. Real contributions retain payer, type, date, activity and carry-forward attribution; Total Contributions appears only for multiple sources, and Total Used only for multiple usage items. Guest-charge context and remaining Credit/Advance are retained.
 - The report starts with usage after the previous cleared period. When earlier dues remain open, retain that period's usage and contributions. A payment received after multiple charges must not hide older usage merely because it settled the oldest item first.
 - Earlier unused Credit or Advance is carried forward, attributed to its owner, and counted once alongside this period's payments. Personal statements include only funds applied to that player and unused funds they own, not another member's unused balance.
 - Canonical source allocations and current recorded settlements determine the display. Same-day events are grouped at stored-date granularity; undated legacy settlements use the neutral Recorded settlement label. There is no new stored reporting ledger.
 - Activity contributions and already-covered own shares appear once on opposite sides of the statement. Reversal may reopen the earlier report period. Summary generation remains read-only.
 - Conservation: Total Used minus Total Contributions equals Amount Due minus Credit Remaining minus Remaining Advance. Separate personal Credit is not silently netted against another member's due; both values remain visible when necessary.
-- A positive Amount Due includes the Aani/DM payment instructions. Clear or surplus-only statements do not ask for payment. All retain the generated-via-app footer.
+- A positive Amount Due includes the Aani/DM payment instructions. Clear or surplus-only statements do not ask for payment. All payment and Advance summaries/reminders end with: "This is an automated message generated via AD Smashers Manager app."
 - The full Summary, Latest Advances, Complete Advance Summary and transaction-only history keep their existing purposes and scopes.
 
 ## Activity Settlement Contract
