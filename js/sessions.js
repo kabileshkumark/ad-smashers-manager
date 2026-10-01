@@ -293,6 +293,18 @@ function normalizeCourtSlotCount(value, fallback = 1) {
   return Number.isFinite(fallbackCount) && fallbackCount > 0 ? Math.max(1, Math.floor(fallbackCount)) : 1;
 }
 
+function parseBookedCourtNumbers(value) {
+  const entries = Array.isArray(value) ? value : String(value ?? "").trim().split(/[\s,]+/);
+  return entries.filter((entry) => String(entry).trim() !== "").map((entry) => {
+    const text = String(entry).trim();
+    return /^\d+$/.test(text) ? Number(text) : text;
+  });
+}
+
+function courtBookingFinancialFields(slots) {
+  return Array.isArray(slots) ? slots.map((slot) => ({ startTime: slot?.startTime, endTime: slot?.endTime, courts: slot?.courts })) : slots;
+}
+
 function normalizeCourtSlots(slots, fallback = {}) {
   const fallbackSlot = {
     startTime: normalizeCourtSlotClock(fallback.startTime, "00:00"),
@@ -300,11 +312,15 @@ function normalizeCourtSlots(slots, fallback = {}) {
     courts: normalizeCourtSlotCount(fallback.courts, 1)
   };
   const source = Array.isArray(slots) && slots.length ? slots : [fallbackSlot];
-  return source.map((slot) => ({
-    startTime: normalizeCourtSlotClock(slot?.startTime, fallbackSlot.startTime),
-    endTime: normalizeCourtSlotClock(slot?.endTime, fallbackSlot.endTime),
-    courts: normalizeCourtSlotCount(slot?.courts, fallbackSlot.courts)
-  }));
+  return source.map((slot) => {
+    const courtNumbers = parseBookedCourtNumbers(slot?.courtNumbers);
+    return {
+      startTime: normalizeCourtSlotClock(slot?.startTime, fallbackSlot.startTime),
+      endTime: normalizeCourtSlotClock(slot?.endTime, fallbackSlot.endTime),
+      courts: normalizeCourtSlotCount(slot?.courts, fallbackSlot.courts),
+      ...(courtNumbers.length ? { courtNumbers } : {})
+    };
+  });
 }
 
 function courtSlotClockMinutes(value) {
@@ -322,9 +338,22 @@ function validateCourtSlots(slots) {
     return { valid: false, message: "Add at least one court booking.", slots: [], timeline: [] };
   }
   const normalized = normalizeCourtSlots(slots);
+  const hasNumbers = normalized.some((slot) => slot.courtNumbers?.length);
   const bookings = [];
   for (let index = 0; index < normalized.length; index += 1) {
     const booking = normalized[index];
+    if (hasNumbers) {
+      const numbers = booking.courtNumbers || [];
+      let message = "";
+      if (numbers.some((number) => !Number.isSafeInteger(number) || number <= 0)) {
+        message = "Use positive whole court numbers separated by commas.";
+      } else if (new Set(numbers).size !== numbers.length) {
+        message = "Each court number must appear only once in a booking.";
+      } else if (numbers.length !== booking.courts) {
+        message = `Enter ${booking.courts} court ${booking.courts === 1 ? "number" : "numbers"}, matching the Courts count.`;
+      }
+      if (message) return { valid: false, message: `Booking ${index + 1}: ${message}`, slots: normalized, timeline: [] };
+    }
     const startClockMinutes = courtSlotClockMinutes(booking.startTime);
     const endClockMinutes = courtSlotClockMinutes(booking.endTime);
     if (startClockMinutes === endClockMinutes) {
@@ -360,12 +389,16 @@ function validateCourtSlots(slots) {
   for (let index = 0; index < boundaries.length - 1; index += 1) {
     const startMinutes = boundaries[index];
     const endMinutes = boundaries[index + 1];
-    const courts = alignedBookings
-      .filter((booking) => booking.startMinutes < endMinutes && booking.endMinutes > startMinutes)
-      .reduce((total, booking) => total + booking.courts, 0);
+    const activeBookings = alignedBookings.filter((booking) => booking.startMinutes < endMinutes && booking.endMinutes > startMinutes);
+    const courts = activeBookings.reduce((total, booking) => total + booking.courts, 0);
     if (!courts) continue;
+    const courtNumbers = activeBookings.flatMap((booking) => booking.courtNumbers || []).sort((a, b) => a - b);
+    if (new Set(courtNumbers).size !== courtNumbers.length) {
+      return { valid: false, message: "The same court number cannot be booked in overlapping time slots.", slots: normalized, timeline: [] };
+    }
     const previous = timeline[timeline.length - 1];
-    if (previous && previous.courts === courts && previous.endMinutes === startMinutes) {
+    if (previous && previous.courts === courts && previous.endMinutes === startMinutes
+      && JSON.stringify(previous.courtNumbers || []) === JSON.stringify(courtNumbers)) {
       previous.endMinutes = endMinutes;
       previous.endTime = courtSlotClockFromMinutes(endMinutes);
       previous.durationHours = (previous.endMinutes - previous.startMinutes) / 60;
@@ -375,12 +408,15 @@ function validateCourtSlots(slots) {
       startTime: courtSlotClockFromMinutes(startMinutes),
       endTime: courtSlotClockFromMinutes(endMinutes),
       courts,
+      ...(hasNumbers ? { courtNumbers } : {}),
       startMinutes,
       endMinutes,
       durationHours: (endMinutes - startMinutes) / 60
     });
   }
-  const canonicalSlots = timeline.map(({ startTime, endTime, courts }) => ({ startTime, endTime, courts }));
+  const canonicalSlots = timeline.map(({ startTime, endTime, courts, courtNumbers }) => ({
+    startTime, endTime, courts, ...(courtNumbers ? { courtNumbers: [...courtNumbers] } : {})
+  }));
   return { valid: true, message: "", slots: canonicalSlots, timeline };
 }
 
@@ -404,7 +440,9 @@ function sessionCourtBookings(session = {}) {
 function sessionCourtSlots(session = {}) {
   const candidate = sessionCourtBookings(session);
   const validation = validateCourtSlots(candidate);
-  return validation.valid ? validation.slots : normalizeCourtSlots([], {
+  // Invalid imported labels must never discard an otherwise valid financial schedule.
+  const financialValidation = validation.valid ? validation : validateCourtSlots(courtBookingFinancialFields(candidate));
+  return financialValidation.valid ? financialValidation.slots : normalizeCourtSlots([], {
     startTime: session.startTime || "00:00",
     endTime: session.endTime || "01:00",
     courts: session.bookedCourts || session.plannedCourts || 1
@@ -412,7 +450,7 @@ function sessionCourtSlots(session = {}) {
 }
 
 function courtSlotMaxCourts(slots) {
-  const validation = validateCourtSlots(slots);
+  const validation = validateCourtSlots(courtBookingFinancialFields(slots));
   const source = validation.valid ? validation.slots : normalizeCourtSlots(slots);
   return source.reduce((maximum, slot) => Math.max(maximum, slot.courts), 0);
 }
@@ -422,7 +460,7 @@ function sessionMaxCourts(session) {
 }
 
 function courtSlotCourtHours(slots) {
-  const validation = validateCourtSlots(slots);
+  const validation = validateCourtSlots(courtBookingFinancialFields(slots));
   if (!validation.valid) return 0;
   return validation.timeline.reduce((total, slot) => total + slot.courts * slot.durationHours, 0);
 }
@@ -442,7 +480,43 @@ function sessionFinancialBasisChanged(currentSession, nextSession) {
   if (!currentSession || !nextSession) return false;
   const fields = ["date", "startTime", "endTime", "courtId", "bookedCourts", "expectedPlayers", "totalPaid", "shuttleCost", "waterCost", "perPersonAmount"];
   return fields.some((fieldName) => String(currentSession[fieldName] ?? "") !== String(nextSession[fieldName] ?? ""))
-    || JSON.stringify(sessionCourtBookings(currentSession)) !== JSON.stringify(sessionCourtBookings(nextSession));
+    || JSON.stringify(courtBookingFinancialFields(sessionCourtBookings(currentSession))) !== JSON.stringify(courtBookingFinancialFields(sessionCourtBookings(nextSession)));
+}
+
+function courtSlotDescription(slot) {
+  return slot.courtNumbers?.length
+    ? `${slot.courtNumbers.length === 1 ? "Court" : "Courts"} ${slot.courtNumbers.join(", ")}`
+    : `${slot.courts} ${slot.courts === 1 ? "court" : "courts"}`;
+}
+
+function sessionCourtAllocationDisplay(session) {
+  const allocation = allocateSession(session);
+  const displays = sessionCourtDisplays(session, allocation.courts.length);
+  return {
+    ...allocation,
+    hasBookedCourtNumbers: sessionCourtBookings(session).some((booking) => booking.courtNumbers?.length),
+    courts: allocation.courts.map((court, index) => ({ ...court, ...displays[index] }))
+  };
+}
+
+function sessionCourtDisplays(session, count) {
+  const emptyDisplays = Array.from({ length: count }, (_, index) => ({ label: `Court ${index + 1}`, availability: "" }));
+  if (!sessionCourtBookings(session).some((booking) => booking.courtNumbers?.length)) return emptyDisplays;
+  const slots = sessionCourtSlots(session);
+  const numbers = [...new Set(slots.flatMap((slot) => slot.courtNumbers || []))].sort((a, b) => a - b);
+  if (!numbers.length) return emptyDisplays;
+  const peak = Math.max(...slots.map((slot) => slot.courts));
+  return emptyDisplays.map((_, index) => {
+    // A changing set larger than peak capacity has no single court per roster group.
+    if (numbers.length > peak || !numbers[index]) return { label: `Player Group ${index + 1}`, availability: "" };
+    const number = numbers[index];
+    const available = slots.filter((slot) => slot.courtNumbers?.includes(number));
+    return {
+      number,
+      label: `Court ${number}`,
+      availability: available.length < slots.length ? available.map((slot) => messageTimeRange(slot, true)).join("; ") : ""
+    };
+  });
 }
 
 function validIsoSessionDate(value) {
@@ -508,7 +582,7 @@ function sessionScheduleKey(session) {
   return [
     String(session?.date || ""),
     String(session?.courtId || ""),
-    JSON.stringify(sessionCourtSlots(session || {}))
+    JSON.stringify(validateCourtSlots(courtBookingFinancialFields(sessionCourtBookings(session || {}))).slots)
   ].join("|");
 }
 

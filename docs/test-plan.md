@@ -22,6 +22,18 @@ The test suite uses Node's built-in test runner and does not require extra packa
 
 ## Current Automated Coverage
 
+### Booked Court Numbers (Build 1.0.20)
+
+- FR-SES-032: each booking accepts explicit court numbers; the count must match Courts. All booking rows are numbered together or remain unnumbered for legacy compatibility.
+- Reject invalid/non-positive/non-integer court numbers, duplicates within a row, and reuse of a physical court in overlapping bookings. Permit adjacent and overnight reuse without overlap.
+- Preserve original booking rows, explicit court numbers, manually edited capacity, and independent recurring occurrences through save, edit, reload, JSON and Firestore serialization.
+- Derive a numbered time breakdown without merging adjacent equal-count intervals when the physical courts differ. Fees still use court-hours and suggested capacity still uses peak count.
+- Session cards, Courts view and published final-list templates show the recorded numbers. Shorter-lived courts show availability; changing sets with no single fixed mapping show Player Groups and the explicit schedule, without inventing court numbers or changing roster order.
+- Number-only changes do not change the financial basis or require reversing payments. Time, count, fee and capacity changes retain their existing financial guards. Incomplete labels while typing or invalid imported labels cannot zero the calculated cost.
+- Saved custom final-list templates retain their content and include the booking numbers once; poll copy is unchanged. Legacy final-list messages remain unchanged until court numbers are entered.
+- Automated regression: 238 tests. Local browser checks covered add/remove booking rows, duplicate validation, save/reload, unchanged fee/rate/capacity, preview, and layouts at 320px, 390px and 1440px. No new physical-device keyboard test is claimed.
+- The September 27 private export was replayed against the prior release: all 48 player ledgers, 35 session calculations, Dashboard finances and existing final lists matched. Adding only court labels preserved the financial results. No production writes were used for QA.
+
 ### Compact Individual Reminders (Build 1.0.19)
 
 - One unpaid session produces only the title, dated charge, Amount Due, payment instructions and automated-message footer. No empty Contributions, duplicate name, member subtotal, From date or duplicate usage total.

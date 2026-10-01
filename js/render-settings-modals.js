@@ -896,6 +896,10 @@ function renderSessionCourtSlot(slot, index, slotCount) {
         ${timeSelectField("slotEndTime", "To", slot.endTime, "modal", "data-session-cost-source")}
         ${numberField("slotCourts", "Courts", slot.courts, 1, "modal", "data-session-cost-source data-session-capacity-source")}
       </div>
+      <label class="field">
+        <span>Court Numbers</span>
+        <input class="input" type="text" name="slotCourtNumbers" value="${escapeAttr((slot.courtNumbers || []).join(", "))}" placeholder="e.g. 2, 4, 6" autocomplete="off" spellcheck="false" aria-label="Court numbers for booking ${index + 1}" />
+      </label>
     </div>
   `;
 }

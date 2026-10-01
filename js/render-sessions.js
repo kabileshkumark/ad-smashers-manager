@@ -73,7 +73,7 @@ function renderSessionCard(session, selectable = false) {
             ${renderSessionStageChips(session)}
           </div>
           <p class="row-subtitle">${escapeHtml(timeRange(session))} at ${escapeHtml(court?.name || "Court not selected")}</p>
-          ${courtSlots.length > 1 ? renderSessionCourtSlotBreakdown(courtSlots) : ""}
+          ${courtSlots.length > 1 || courtSlots.some((slot) => slot.courtNumbers?.length) ? renderSessionCourtSlotBreakdown(courtSlots) : ""}
         </div>
       </div>
       <div class="meta-grid session-card-metrics">
@@ -105,7 +105,7 @@ function renderSessionCourtSlotBreakdown(slots) {
           (slot) => `
             <span class="session-court-breakdown-item">
               <strong>${escapeHtml(messageTimeRange(slot, true))}</strong>
-              <span>${escapeHtml(`${slot.courts} ${slot.courts === 1 ? "court" : "courts"}`)}</span>
+              <span>${escapeHtml(courtSlotDescription(slot))}</span>
             </span>
           `
         )
@@ -178,7 +178,7 @@ function renderOverviewTab(session) {
           <div class="meta"><span>Capacity</span><strong>${escapeHtml(stats.capacity)}</strong></div>
           <div class="meta"><span>Court-hours</span><strong>${escapeHtml(Number(sessionCourtHours(session).toFixed(2)))}</strong></div>
         </div>
-        ${courtSlots.length > 1 ? renderSessionCourtSlotBreakdown(courtSlots) : ""}
+        ${courtSlots.length > 1 || courtSlots.some((slot) => slot.courtNumbers?.length) ? renderSessionCourtSlotBreakdown(courtSlots) : ""}
         <div class="toolbar">
           <button class="btn" type="button" data-action="edit-session" data-session="${escapeAttr(session.id)}">Edit Session Setup</button>
         </div>
@@ -343,7 +343,7 @@ function renderResponseRow(response) {
 }
 
 function renderCourtAllocationTab(session) {
-  const allocation = allocateSession(session);
+  const allocation = sessionCourtAllocationDisplay(session);
   const playersPerCourt = getPlayersPerCourt(session);
   return `
     <div class="detail-content">
@@ -355,6 +355,7 @@ function renderCourtAllocationTab(session) {
           </div>
           <button class="btn" type="button" data-action="edit-session" data-session="${escapeAttr(session.id)}">Edit Court Slots</button>
         </div>
+        ${sessionCourtBookings(session).some((booking) => booking.courtNumbers?.length) ? renderSessionCourtSlotBreakdown(sessionCourtSlots(session)) : ""}
         <div class="allocation">
           ${allocation.courts.map((court) => renderCourtSection(court, playersPerCourt)).join("")}
           ${renderWaitingList(allocation.waiting)}
@@ -382,7 +383,8 @@ function renderCourtSection(court, playersPerCourt = PLAYERS_PER_COURT) {
   const emptySlots = Array.from({ length: Math.max(0, playersPerCourt - court.players.length) }, (_, index) => index + 1);
   return `
     <section class="court-section">
-      <h3>Court ${escapeHtml(court.number)} <span class="muted">${escapeHtml(court.skillGroup || "Open")}</span></h3>
+      <h3>${escapeHtml(court.label || `Court ${court.number}`)} <span class="muted">${escapeHtml(court.skillGroup || "Open")}</span></h3>
+      ${court.availability ? `<p class="muted">${escapeHtml(court.availability)}</p>` : ""}
       <ul class="player-list">
         ${court.players
           .map(

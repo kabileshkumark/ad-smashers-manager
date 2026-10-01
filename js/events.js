@@ -83,7 +83,8 @@ function sessionCourtSlotsFromForm(form) {
     return rows.map((row) => ({
       startTime: row.querySelector('[name="slotStartTime"]')?.value || "00:00",
       endTime: row.querySelector('[name="slotEndTime"]')?.value || "01:00",
-      courts: row.querySelector('[name="slotCourts"]')?.value || 1
+      courts: row.querySelector('[name="slotCourts"]')?.value || 1,
+      courtNumbers: row.querySelector('[name="slotCourtNumbers"]')?.value || ""
     }));
   }
   const fields = form?.elements || {};
@@ -99,6 +100,7 @@ function refreshSessionCourtSlotControls(form) {
   rows.forEach((row, index) => {
     const heading = row.querySelector(".session-court-slot-heading strong");
     const removeButton = row.querySelector('[data-action="remove-session-court-slot"]');
+    row.querySelector('[name="slotCourtNumbers"]')?.setAttribute("aria-label", `Court numbers for booking ${index + 1}`);
     if (heading) heading.textContent = `Booking ${index + 1}`;
     if (removeButton) {
       removeButton.disabled = rows.length <= 1;
