@@ -22,6 +22,18 @@ The test suite uses Node's built-in test runner and does not require extra packa
 
 ## Current Automated Coverage
 
+### Recurring Session Editing (Build 1.0.21)
+
+- FR-SES-033: edit one occurrence or the Full series. This session is the default; Full series includes upcoming occurrences only, excluding past, in-progress and Completed / Payment Collection records.
+- Existing Repeat controls display the saved schedule and are enabled for Full series. Scope changes preserve independently entered date values; series date shifts use the first upcoming occurrence as the reference.
+- Extend Repeat Until without recreating cancelled gaps. Preserve the recurrence weekday after independent occurrence edits. New records have fresh IDs and empty attendance, payments, publication state and notes.
+- Shorten a series or switch Weekly to Once only after explicit confirmation naming the empty future occurrences to cancel. Once keeps the first upcoming occurrence. Reject bulk removal of any occurrence with player, attendance, guest, notes, publication or financial history.
+- Convert an upcoming one-time session to Weekly while retaining the original ID and roster. Past/completed conversions are rejected.
+- Validate the entire edit before mutation: invalid/past dates, duplicate schedules, excessive ranges and recorded-payment financial-basis changes must leave all sessions unchanged.
+- Preserve independent manual capacity, court fee and per-person rate unless explicitly edited/reset. Recalculate automatic values from court-hours and peak count. Preserve court numbers, organizer snapshots, unrelated series, existing IDs and retained history.
+- Automated regression: 259 tests passed. Local browser QA covered single edit, full-series extension, scope from a later occurrence, shortening confirmation, Once/Weekly conversion, save/reopen and desktop/390px layouts. No new physical-device keyboard test is claimed.
+- A private October 1 export replay preserved all 50 player balances, 25 past sessions and 130 receipts, including after backup reload. QA is localhost-only, with production connections blocked and real exports excluded from Git and Hosting.
+
 ### Booked Court Numbers (Build 1.0.20)
 
 - FR-SES-032: each booking accepts explicit court numbers; the count must match Courts. All booking rows are numbered together or remain unnumbered for legacy compatibility.

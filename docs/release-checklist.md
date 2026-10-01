@@ -1,6 +1,6 @@
 # Release Checklist
 
-Current owner-approved candidate: [Version 1.0, technical build 1.0.20](releases/v1.0.20.md). The completed checklist below is historical evidence for build 1.0.10, not the current deployment status. Current CI, commit and deployment evidence is recorded with each GitHub release.
+Current owner-approved candidate: [Version 1.0, technical build 1.0.21](releases/v1.0.21.md). The completed checklist below is historical evidence for build 1.0.10, not the current deployment status. Current CI, commit and deployment evidence is recorded with each GitHub release.
 
 ## Release
 

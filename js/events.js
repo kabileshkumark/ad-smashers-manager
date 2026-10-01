@@ -110,7 +110,12 @@ function refreshSessionCourtSlotControls(form) {
 }
 
 function updateSessionRecurrenceControls(form) {
-  if (!form || form.dataset.editId) return;
+  if (!form) return;
+  const seriesEdit = form.querySelector('[name="editScope"]:checked')?.value === "series";
+  const existing = form.dataset.editId ? getSession(form.dataset.editId) : null;
+  const locked = Boolean(normalizeSessionRecurrence(existing?.recurrence) && !seriesEdit);
+  const controls = form.querySelector("[data-session-repeat-controls]");
+  if (controls) controls.disabled = locked;
   const frequency = normalizeRecurrenceFrequency(form.querySelector('[name="recurrence"]:checked')?.value || "none");
   const fields = form.querySelector("[data-session-recurrence-fields]");
   const endInput = form.querySelector("[data-session-recurrence-end]");
@@ -131,11 +136,35 @@ function updateSessionRecurrenceControls(form) {
       : frequency === "weekly" ? "Check end date" : "One session";
   }
   const submit = form.querySelector("[data-session-submit-label]");
-  if (submit) submit.textContent = frequency === "weekly" ? "Create Sessions" : "Create Session";
+  if (submit) submit.textContent = existing
+    ? seriesEdit ? "Save Full Series" : "Save Session"
+    : frequency === "weekly" ? "Create Sessions" : "Create Session";
+  if (locked && summary) summary.textContent = "This occurrence only";
+  else if (seriesEdit && summary && plan.valid) summary.textContent = frequency === "weekly" ? "Weekly series" : "Keep first upcoming session";
+}
+
+function updateSessionEditScope(form) {
+  const session = getSession(form?.dataset.editId);
+  if (!session) return;
+  const seriesEdit = form.querySelector('[name="editScope"]:checked')?.value === "series";
+  const dateInput = form.elements.date;
+  const upcoming = upcomingSessionSeries(session);
+  const previousScope = form.dataset.editScope || "single";
+  form.dataset[previousScope === "series" ? "seriesDate" : "singleDate"] = dateInput.value;
+  dateInput.value = seriesEdit
+    ? form.dataset.seriesDate || upcoming[0]?.date || session.date
+    : form.dataset.singleDate || session.date;
+  form.dataset.editScope = seriesEdit ? "series" : "single";
+  const label = dateInput.closest("label")?.querySelector("span");
+  if (label) label.textContent = seriesEdit ? "First Upcoming Session" : "Date";
+  updateSessionRecurrenceControls(form);
 }
 
 function applySessionDateDefaults(form) {
-  if (form?.dataset.editId) return;
+  if (form?.dataset.editId) {
+    updateSessionRecurrenceControls(form);
+    return;
+  }
   const fields = form?.elements;
   if (!fields?.date) return;
   const type = sessionTypeForDate(fields.date.value, fields.type?.value || "Friday");
@@ -425,6 +454,7 @@ function handleClick(event) {
     const capacityInput = form?.elements?.expectedPlayers;
     if (!form || !capacityInput) return;
     delete capacityInput.dataset.manual;
+    capacityInput.dataset.edited = "true";
     updateSessionModalCalculations(form);
     capacityInput.focus();
     return;
@@ -1085,14 +1115,29 @@ function handleInput(event) {
   const courtFeeInput = event.target.closest("[data-court-fee-input]");
   if (courtFeeInput) {
     courtFeeInput.dataset.manual = "true";
+    courtFeeInput.dataset.edited = "true";
   }
   const expectedPlayersInput = event.target.closest("[data-expected-players-input]");
   if (expectedPlayersInput) {
     expectedPlayersInput.dataset.manual = "true";
+    expectedPlayersInput.dataset.edited = "true";
   }
   const perPersonInput = event.target.closest("[data-per-person-input]");
   if (perPersonInput) {
     perPersonInput.dataset.manual = "true";
+    perPersonInput.dataset.edited = "true";
+  }
+  const sessionForm = event.target.closest('form[data-form="session"]');
+  if (sessionForm && event.target.name !== "confirmSeriesCancellation") {
+    const confirmation = sessionForm.querySelector("[data-session-cancellation-confirmation]");
+    if (confirmation) confirmation.hidden = true;
+    if (sessionForm.elements.confirmSeriesCancellation) sessionForm.elements.confirmSeriesCancellation.checked = false;
+    const feedback = sessionForm.querySelector("[data-session-edit-feedback]");
+    if (feedback) feedback.hidden = true;
+  }
+  if (event.target.closest("[data-session-edit-scope]")) {
+    updateSessionEditScope(sessionForm);
+    return;
   }
   const recurrenceEndInput = event.target.closest("[data-session-recurrence-end]");
   if (recurrenceEndInput) recurrenceEndInput.dataset.manual = "true";
@@ -1337,23 +1382,36 @@ async function handleSubmit(event) {
     }
     let session = existingSession;
     if (existingSession) {
-      const changedFinancialBasis = sessionFinancialBasisChanged(existingSession, sessionData);
-      const recalculatesDerivedCoverage = changedFinancialBasis
-        && sessionHasActiveFinancialState(existingSession)
-        && !sessionHasRecordedFinancialState(existingSession);
-      if (changedFinancialBasis && sessionHasRecordedFinancialState(existingSession)) {
-        showToast("Reverse or delete recorded payments before changing this session's financial basis.");
-        render();
+      const plan = withLedgerCoverageSnapshotCache(() => buildSessionEditPlan(existingSession, sessionData, {
+        scope: data.editScope || "single",
+        frequency: data.recurrence || "none",
+        endDate: data.recurrenceEndDate || "",
+        capacityExplicit: form.elements.expectedPlayers?.dataset.edited === "true",
+        feeExplicit: form.elements.totalPaid?.dataset.edited === "true",
+        rateExplicit: form.elements.perPersonAmount?.dataset.edited === "true"
+      }));
+      if (!plan.valid) {
+        showToast(plan.message);
+        const feedback = form.querySelector("[data-session-edit-feedback]");
+        if (feedback) { feedback.textContent = plan.message; feedback.hidden = false; }
         return;
       }
-      Object.assign(existingSession, sessionData);
-      delete existingSession.courtSlots;
-      updateSessionPerPersonAmount(existingSession, sessionData.perPersonAmount);
-      applyAutomaticSessionStage(existingSession);
-      syncSessionPayments(existingSession);
-      showToast(recalculatesDerivedCoverage
-        ? "Session updated. Advance and Credit coverage recalculated."
-        : "Session updated.");
+      const cancellationKey = JSON.stringify(plan.removed.map((item) => [item.id, item.date]));
+      const confirmation = form.querySelector("[data-session-cancellation-confirmation]");
+      if (plan.removed.length && (!data.confirmSeriesCancellation || confirmation?.dataset.key !== cancellationKey)) {
+        if (confirmation) {
+          confirmation.hidden = false;
+          confirmation.dataset.key = cancellationKey;
+          form.querySelector("[data-session-cancellation-label]").textContent = `Cancel ${plan.removed.length} upcoming sessions: ${plan.removed.map((item) => formatDate(item.date)).join(", ")}`;
+          confirmation.scrollIntoView({ block: "nearest" });
+        }
+        return;
+      }
+      applySessionEditPlan(plan);
+      session = getSession(plan.selectedId);
+      showToast(plan.seriesEdit
+        ? `Series saved: ${plan.updated.length} updated, ${plan.created.length} added, ${plan.removed.length} cancelled. Past sessions unchanged.`
+        : plan.created.length ? `Session updated; ${plan.created.length} weekly sessions added.` : "Session updated.");
     } else {
       const creation = buildNewSessionRecords(
         { ...sessionData, pollStatus: "Draft" },
