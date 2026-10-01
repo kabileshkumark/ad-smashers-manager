@@ -638,6 +638,175 @@ function buildNewSessionRecords(baseData, recurrenceOptions = {}, existingSessio
   return { ...plan, records };
 }
 
+function upcomingSessionSeries(session, sessions = state.sessions) {
+  const recurrence = normalizeSessionRecurrence(session?.recurrence);
+  if (!recurrence) return [];
+  return sessions.filter((item) => item.recurrence?.id === recurrence.id
+    && sessionStartTime(item) > Date.now()
+    && !["Completed", "Payment Collection"].includes(item.stage))
+    .sort((a, b) => sessionStartTime(a) - sessionStartTime(b) || String(a.id).localeCompare(String(b.id)));
+}
+
+function sessionSeriesCancellationBlocked(session) {
+  return Boolean((session.responses || []).length
+    || session.attendanceManual
+    || (session.attendedPlayerIds || []).length
+    || (session.manualAttendedPlayerIds || []).length
+    || (session.removedGuestKeys || []).length
+    || Object.keys(session.manualGuestCounts || {}).length
+    || Object.keys(session.guestNames || {}).length
+    || Object.keys(session.payments || {}).length
+    || Object.values(session.sent || {}).some(Boolean)
+    || String(session.notes || "").trim()
+    || normalizeStage(session.stage) !== "Draft"
+    || (session.pollStatus && session.pollStatus !== "Draft")
+    || sessionHasFinancialHistory(session));
+}
+
+function buildSessionEditPlan(session, formData, options = {}, sessions = state.sessions) {
+  const fail = (message) => ({ valid: false, message, updated: [], created: [], removed: [] });
+  if (!session || !sessions.some((item) => item.id === session.id)) return fail("Session no longer exists. Reopen the session list.");
+  const bookingFields = ["courtId", "startTime", "endTime", "courtBookings", "plannedCourts", "bookedCourts", "playersPerCourt", "expectedPlayers", "totalPaid", "shuttleCost", "waterCost", "perPersonAmount"];
+  const sessionData = Object.fromEntries([...bookingFields, "date", "type", "groupId", "stage", "bookingStatus"]
+    .filter((key) => Object.hasOwn(formData, key)).map((key) => [key, formData[key]]));
+  if (!validIsoSessionDate(sessionData.date)) return fail("Select a valid session date.");
+  const recurrence = normalizeSessionRecurrence(session.recurrence);
+  const seriesEdit = Boolean(recurrence && options.scope === "series");
+  const copy = (value) => JSON.parse(JSON.stringify(value));
+  let updated = [];
+  let created = [];
+  let removed = [];
+  let selectedId = session.id;
+  // New occurrences copy booking details only, never rosters, receipts or published state.
+  const newBase = {
+    ...copy(sessionData), stage: "Draft", pollStatus: "Draft",
+    organizerPlayerId: String(session.organizerPlayerId ?? state.settings.organizerPlayerId ?? ""),
+    coOrganizerPlayerId: String(session.coOrganizerPlayerId ?? state.settings.coOrganizerPlayerId ?? "")
+  };
+  if (!seriesEdit) {
+    const next = { ...copy(session), ...copy(sessionData) };
+    delete next.courtSlots;
+    updated = [next];
+    if (!recurrence && normalizeRecurrenceFrequency(options.frequency) === "weekly") {
+      if (sessionStartTime(next) <= Date.now() || ["Completed", "Payment Collection"].includes(session.stage)) {
+        return fail("Start a new recurring session on an upcoming date. Past sessions cannot become a new series.");
+      }
+      const creation = buildNewSessionRecords(newBase, options, sessions.filter((item) => item.id !== session.id));
+      if (!creation.valid) return fail(creation.message);
+      next.recurrence = creation.records[0].recurrence;
+      created = creation.records.slice(1);
+    }
+  } else {
+    const upcoming = upcomingSessionSeries(session, sessions);
+    if (!upcoming.length) return fail("No upcoming sessions in this series. Past sessions are preserved.");
+    const first = upcoming[0];
+    const plan = buildSessionRecurrencePlan(sessionData.date, options.frequency, options.endDate);
+    if (!plan.valid) return fail(plan.message);
+    const dayShift = Math.round((Date.parse(`${sessionData.date}T12:00:00Z`) - Date.parse(`${first.date}T12:00:00Z`)) / 86400000);
+    const patch = {};
+    bookingFields.filter((key) => Object.hasOwn(sessionData, key)).forEach((key) => {
+      const before = key === "courtBookings" ? sessionCourtBookings(session) : session[key];
+      if (JSON.stringify(before) !== JSON.stringify(sessionData[key])) patch[key] = sessionData[key];
+    });
+    if (options.capacityExplicit) patch.expectedPlayers = sessionData.expectedPlayers;
+    if (options.feeExplicit) patch.totalPaid = sessionData.totalPaid;
+    if (options.rateExplicit) patch.perPersonAmount = sessionData.perPersonAmount;
+    upcoming.forEach((original, index) => {
+      const date = addDaysIso(original.date, dayShift);
+      if ((plan.frequency === "none" && index > 0) || date > plan.endDate) {
+        removed.push(original);
+        return;
+      }
+      const next = { ...copy(original), ...copy(patch), date };
+      const schedule = validateCourtSlots(sessionCourtBookings(next));
+      if (schedule.valid) {
+        next.startTime = schedule.slots[0].startTime;
+        next.endTime = schedule.slots.at(-1).endTime;
+        next.bookedCourts = courtSlotMaxCourts(schedule.slots);
+        next.plannedCourts = next.bookedCourts;
+      }
+      if (!options.capacityExplicit) {
+        next.expectedPlayers = original.expectedPlayers === calculateExpectedPlayers(sessionMaxCourts(original), original.playersPerCourt)
+          ? calculateExpectedPlayers(next.bookedCourts, next.playersPerCourt)
+          : original.expectedPlayers;
+      }
+      if (!options.feeExplicit) {
+        next.totalPaid = original.totalPaid === calculateCourtFeeForSlots(original.courtId, sessionCourtSlots(original))
+          ? calculateCourtFeeForSlots(next.courtId, sessionCourtSlots(next))
+          : original.totalPaid;
+      }
+      if (!options.rateExplicit) {
+        const automaticRate = calculatePerPersonRate(original.totalPaid, original.expectedPlayers, original.shuttleCost);
+        next.perPersonAmount = original.perPersonAmount === automaticRate
+          ? calculatePerPersonRate(next.totalPaid, next.expectedPlayers, next.shuttleCost)
+          : original.perPersonAmount;
+      }
+      if (date !== original.date) {
+        next.type = sessionTypeForDate(date, original.type);
+        next.groupId = sessionGroupIdFor(next);
+      }
+      delete next.courtSlots;
+      updated.push(next);
+    });
+    const blocked = removed.find(sessionSeriesCancellationBlocked);
+    if (blocked) return fail(`${formatDate(blocked.date)} has player, publication or payment history. It cannot be cancelled by a series edit. No sessions changed.`);
+    // Missing dates inside the previous range are cancelled occurrences, not gaps to refill.
+    const previousEnd = upcoming.reduce((end, item) => item.recurrence?.endDate > end ? item.recurrence.endDate : end, first.date);
+    const shiftedEnd = addDaysIso(previousEnd, dayShift);
+    const recurrenceAnchor = addDaysIso(first.recurrence.startDate, dayShift);
+    if (plan.frequency === "weekly") {
+      const elapsedDays = Math.round((Date.parse(`${shiftedEnd}T12:00:00Z`) - Date.parse(`${recurrenceAnchor}T12:00:00Z`)) / 86400000);
+      const extensionStart = addDaysIso(shiftedEnd, 7 - ((elapsedDays % 7 + 7) % 7));
+      const extension = extensionStart <= plan.endDate ? buildSessionRecurrencePlan(extensionStart, "weekly", plan.endDate) : {valid:true,dates:[]};
+      if (!extension.valid) return fail(extension.message);
+      for (const date of extension.dates) {
+        const creation = buildNewSessionRecords({ ...newBase, date }, { frequency: "none" }, []);
+        if (!creation.valid) return fail(creation.message);
+        created.push(...creation.records);
+      }
+    }
+    const occurrences = [...updated, ...created].sort((a, b) => a.date.localeCompare(b.date));
+    if (occurrences.length > MAX_RECURRING_SESSIONS) return fail(`Keep at most ${MAX_RECURRING_SESSIONS} upcoming sessions in a series.`);
+    if (occurrences.some((item) => sessionStartTime(item) <= Date.now())) return fail("Series edits must keep all upcoming sessions in the future.");
+    occurrences.forEach((item, index) => {
+      if (plan.frequency === "weekly") {
+        item.recurrence = { id: recurrence.id, frequency: "weekly", startDate: recurrenceAnchor, endDate: plan.endDate, sequence: index + 1, count: occurrences.length };
+      } else {
+        delete item.recurrence;
+      }
+    });
+    selectedId = occurrences.some((item) => item.id === session.id) ? session.id : occurrences[0]?.id;
+  }
+  const changedIds = new Set([...updated, ...removed].map((item) => item.id));
+  const keys = new Set(sessions.filter((item) => !changedIds.has(item.id)).map(sessionScheduleKey));
+  for (const item of [...updated, ...created]) {
+    const validation = validateCourtSlots(sessionCourtBookings(item));
+    if (!validation.valid) return fail(validation.message);
+    const original = sessions.find((source) => source.id === item.id);
+    if (original && sessionFinancialBasisChanged(original, item) && sessionHasRecordedFinancialState(original)) {
+      return fail(`${formatDate(original.date)} has recorded payments. Reverse or delete those payments before changing its financial basis. No sessions changed.`);
+    }
+    const key = sessionScheduleKey(item);
+    if (keys.has(key)) return fail(`A matching session already exists on ${formatDate(item.date)}. No sessions changed.`);
+    keys.add(key);
+  }
+  return { valid: true, message: "", updated, created, removed, selectedId, seriesEdit };
+}
+
+function applySessionEditPlan(plan) {
+  if (!plan?.valid) return false;
+  const replacements = new Map(plan.updated.map((session) => [session.id, session]));
+  const removedIds = new Set(plan.removed.map((session) => session.id));
+  state.sessions = state.sessions.filter((session) => !removedIds.has(session.id))
+    .map((session) => replacements.get(session.id) || session);
+  state.sessions.push(...plan.created);
+  plan.updated.forEach((session) => {
+    syncSessionPayments(session);
+    applyAutomaticSessionStage(session);
+  });
+  return true;
+}
+
 function calculateExpectedPlayers(bookedCourts, playersPerCourt) {
   const courtCount = Number(bookedCourts || 0);
   const perCourt = Number(playersPerCourt || 0);

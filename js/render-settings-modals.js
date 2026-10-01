@@ -904,7 +904,7 @@ function renderSessionCourtSlot(slot, index, slotCount) {
   `;
 }
 
-function renderSessionRecurrenceControls(frequency, endDate, startDate) {
+function renderSessionRecurrenceControls(frequency, endDate, startDate, locked = false) {
   const weekly = frequency === "weekly";
   const plan = buildSessionRecurrencePlan(startDate, frequency, endDate);
   const count = plan.valid ? plan.dates.length : 0;
@@ -912,8 +912,9 @@ function renderSessionRecurrenceControls(frequency, endDate, startDate) {
     <section class="session-recurrence" aria-labelledby="session-recurrence-title">
       <div class="session-recurrence-heading">
         <h3 id="session-recurrence-title">Repeat</h3>
-        <span data-session-recurrence-summary>${weekly && count ? `${count} ${count === 1 ? "session" : "sessions"}` : "One session"}</span>
+        <span data-session-recurrence-summary>${locked ? "This occurrence only" : weekly && count ? `${count} ${count === 1 ? "session" : "sessions"}` : "One session"}</span>
       </div>
+      <fieldset class="session-repeat-controls" data-session-repeat-controls ${locked ? "disabled" : ""}>
       <div class="segmented-control" role="radiogroup" aria-label="Session recurrence">
         <label>
           <input type="radio" name="recurrence" value="none" data-session-recurrence-source ${weekly ? "" : "checked"} />
@@ -927,6 +928,7 @@ function renderSessionRecurrenceControls(frequency, endDate, startDate) {
       <div class="session-recurrence-fields" data-session-recurrence-fields ${weekly ? "" : "hidden"}>
         ${field("recurrenceEndDate", "Repeat Until", "date", endDate, "modal", `data-session-recurrence-end data-session-recurrence-source ${weekly ? "required" : "disabled"}`)}
       </div>
+      </fieldset>
     </section>
   `;
 }
@@ -994,8 +996,10 @@ function renderSessionModal(sessionId = "") {
       : settings.defaultPerPersonAmount;
   const perPersonManual = isEdit ? perPersonAmount !== calculatedPerPersonAmount : !settings.autoCalculatePerPersonRate;
   const perPersonAttrs = `data-per-person-input${perPersonManual ? ' data-manual="true"' : ""}`;
-  const recurrenceFrequency = isEdit ? "none" : normalizeRecurrenceFrequency(settings.defaultRecurrence);
-  const recurrenceEndDate = sessionDate;
+  const recurrence = normalizeSessionRecurrence(session?.recurrence);
+  const upcoming = recurrence ? upcomingSessionSeries(session) : [];
+  const recurrenceFrequency = isEdit ? recurrence?.frequency || "none" : normalizeRecurrenceFrequency(settings.defaultRecurrence);
+  const recurrenceEndDate = upcoming[0]?.recurrence?.endDate || recurrence?.endDate || sessionDate;
   return `
     <div class="modal-backdrop" data-modal-backdrop>
       <form class="modal-card" data-form="session" data-edit-id="${escapeAttr(session?.id || "")}" role="dialog" aria-modal="true" aria-labelledby="session-modal-title">
@@ -1004,6 +1008,14 @@ function renderSessionModal(sessionId = "") {
           <button class="btn icon-button" type="button" data-action="close-modal" aria-label="Close">X</button>
         </div>
         <div class="form-grid">
+          ${recurrence ? `
+            <section class="session-recurrence" aria-label="Edit scope">
+              <div class="session-recurrence-heading"><h3>Edit</h3><span>Past sessions preserved in Full series</span></div>
+              <div class="segmented-control" role="radiogroup" aria-label="Edit scope">
+                <label><input type="radio" name="editScope" value="single" data-session-edit-scope checked /><span>This session</span></label>
+                <label><input type="radio" name="editScope" value="series" data-session-edit-scope ${upcoming.length ? "" : "disabled"} /><span>Full series (${upcoming.length} upcoming)</span></label>
+              </div>
+            </section>` : ""}
           <div class="session-form-row two">
             ${field("date", "Date", "date", sessionDate, "modal", "data-session-date-source")}
             ${selectSimple("type", "Session Type", ["Friday", "Saturday", "FlexiDay"], sessionType, "modal")}
@@ -1033,7 +1045,12 @@ function renderSessionModal(sessionId = "") {
             ${numberField("shuttleCost", "Shuttle Fee", shuttleCost, 0, "modal", "data-session-rate-source")}
           </div>
           ${numberField("perPersonAmount", "Per Person Rate", perPersonAmount, 0, "modal", perPersonAttrs)}
-          ${isEdit ? "" : renderSessionRecurrenceControls(recurrenceFrequency, recurrenceEndDate, sessionDate)}
+          ${renderSessionRecurrenceControls(recurrenceFrequency, recurrenceEndDate, sessionDate, Boolean(recurrence))}
+          <p class="form-feedback" data-session-edit-feedback role="alert" hidden></p>
+          <label class="checkbox-line" data-session-cancellation-confirmation hidden>
+            <input type="checkbox" name="confirmSeriesCancellation" />
+            <span data-session-cancellation-label></span>
+          </label>
         </div>
         <div class="toolbar modal-actions">
           <button class="btn" type="button" data-action="close-modal">Cancel</button>

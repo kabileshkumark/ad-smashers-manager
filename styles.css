@@ -3136,6 +3136,20 @@ body.is-scrolling-content .bottom-nav {
   grid-template-columns: minmax(0, 240px);
 }
 
+.session-repeat-controls {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.session-repeat-controls:disabled,
+.segmented-control input:disabled + span {
+  opacity: 0.55;
+}
+
 .session-defaults-form {
   display: grid;
   gap: 18px;

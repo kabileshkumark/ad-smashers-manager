@@ -3191,7 +3191,9 @@ test("one recurring occurrence can be edited or cancelled without changing the o
   run(context, `state.sessions.find((session) => session.id === ${JSON.stringify(records[2].id)}).totalPaid = 240`);
   assert.equal(run(context, `state.sessions.find((session) => session.id === ${JSON.stringify(records[0].id)}).totalPaid`), 300);
   const editHtml = run(context, `renderSessionModal(${JSON.stringify(records[2].id)})`);
-  assert.doesNotMatch(editHtml, /data-session-recurrence-source/);
+  assert.match(editHtml, /name="editScope" value="single"[^>]*checked/);
+  assert.match(editHtml, /data-session-repeat-controls disabled/);
+  assert.match(editHtml, /name="recurrence" value="weekly"[^>]*checked/);
 
   run(context, "showToast = () => {};");
   context.__deleteTarget = { dataset: { deleteType: "session", session: cancelledId } };
@@ -3199,6 +3201,266 @@ test("one recurring occurrence can be edited or cancelled without changing the o
   assert.equal(run(context, "state.sessions.length"), 4);
   assert.equal(run(context, `Boolean(state.sessions.find((session) => session.id === ${JSON.stringify(cancelledId)}))`), false);
   assert.deepEqual(jsonValue(context, "state.sessions.map((session) => session.id)"), retainedIds);
+});
+
+function recurrenceEditContext() {
+  const context = createAppContext();
+  installFakeDate(context, "2026-10-01T12:00:00");
+  setAppState(context, baseFixture({
+    sessions: ["2026-09-25", "2026-10-02", "2026-10-09", "2026-10-16"].map((date, index) => baseSession({
+      id: `weekly-${index}`, date, stage: "Draft", totalPaid: 120, perPersonAmount: 20,
+      organizerPlayerId: "organizer", coOrganizerPlayerId: "co-organizer",
+      courtBookings: [{ startTime: "19:00", endTime: "21:00", courts: 1, courtNumbers: [4] }],
+      recurrence: { id: "series-1", frequency: "weekly", startDate: "2026-09-25", endDate: "2026-10-16", sequence: index + 1, count: 4 }
+    }))
+  }));
+  run(context, `
+    __original = JSON.stringify(state);
+    __data = JSON.parse(JSON.stringify(state.sessions[1]));
+    __options = { scope: "series", frequency: "weekly", endDate: "2026-10-16" };
+  `);
+  return context;
+}
+
+test("single recurring edits retain the series and leave every other occurrence unchanged", () => {
+  const context = recurrenceEditContext();
+  const before = jsonValue(context, "state.sessions");
+  run(context, '__data.totalPaid = 180; __data.perPersonAmount = 30; __plan = buildSessionEditPlan(state.sessions[1], __data, {scope:"single", frequency:"none"})');
+  assert.equal(run(context, "__plan.valid"), true);
+  assert.equal(run(context, "JSON.stringify(state) === __original"), true);
+  run(context, "applySessionEditPlan(__plan)");
+  assert.equal(run(context, "state.sessions[1].totalPaid"), 180);
+  assert.deepEqual(jsonValue(context, "state.sessions[1].recurrence"), before[1].recurrence);
+  assert.deepEqual(jsonValue(context, "state.sessions.filter((item) => item.id !== 'weekly-1')"), before.filter((item) => item.id !== "weekly-1"));
+});
+
+test("full series edits preserve past history, IDs, rosters and independent capacity", () => {
+  const context = recurrenceEditContext();
+  run(context, `
+    state.sessions[2].expectedPlayers = 10;
+    state.sessions[2].perPersonAmount = 17;
+    state.sessions[2].notes = "Independent booking";
+    state.sessions[2].responses = [{id:"vote", playerId:"player-a", voteOrder:1, attendanceChoice:"in"}];
+    state.sessions[2].sent = {poll:"sent"};
+    __data.courtBookings[0].courtNumbers = [6];
+    __plan = buildSessionEditPlan(state.sessions[1], __data, __options);
+  `);
+  const past = jsonValue(context, "state.sessions[0]");
+  assert.equal(run(context, "__plan.valid"), true);
+  assert.equal(run(context, "__plan.updated.length"), 3);
+  run(context, "applySessionEditPlan(__plan)");
+  assert.deepEqual(jsonValue(context, "state.sessions[0]"), past);
+  assert.deepEqual(jsonValue(context, "state.sessions.map(item => item.id)"), ["weekly-0", "weekly-1", "weekly-2", "weekly-3"]);
+  assert.equal(run(context, "state.sessions[2].expectedPlayers"), 10);
+  assert.equal(run(context, "state.sessions[2].perPersonAmount"), 17);
+  assert.equal(run(context, "state.sessions[2].notes"), "Independent booking");
+  assert.equal(run(context, "state.sessions[2].responses[0].id"), "vote");
+  assert.equal(run(context, "state.sessions[2].sent.poll"), "sent");
+  assert.deepEqual(jsonValue(context, "state.sessions.slice(1).map(item => item.courtBookings[0].courtNumbers)"), [[6], [6], [6]]);
+  run(context, "state.sessions[1].courtBookings[0].courtNumbers[0] = 9");
+  assert.equal(run(context, "state.sessions[2].courtBookings[0].courtNumbers[0]"), 6);
+});
+
+test("series extension adds fresh occurrences without restoring an independently cancelled date", () => {
+  const context = recurrenceEditContext();
+  run(context, `
+    state.sessions = state.sessions.filter(item => item.id !== "weekly-2");
+    __options.endDate = "2026-10-30";
+    __plan = buildSessionEditPlan(state.sessions[1], __data, __options);
+  `);
+  assert.equal(run(context, "__plan.valid"), true);
+  assert.deepEqual(jsonValue(context, "__plan.created.map(item=>item.date)"), ["2026-10-23", "2026-10-30"]);
+  assert.equal(run(context, "__plan.created[0].organizerPlayerId"), "organizer");
+  assert.deepEqual(jsonValue(context, "__plan.created.map(item=>[item.responses,item.payments,item.sent,item.notes])"), [[[], {}, {}, ""], [[], {}, {}, ""]]);
+  run(context, "applySessionEditPlan(__plan)");
+  assert.equal(run(context, 'state.sessions.some(item=>item.date === "2026-10-09")'), false);
+  const reloaded = jsonValue(context, "state");
+  setAppState(context, reloaded);
+  assert.equal(run(context, "state.sessions.at(-1).recurrence.endDate"), "2026-10-30");
+  assert.equal(run(context, "state.sessions.at(-1).courtBookings[0].courtNumbers[0]"), 4);
+});
+
+test("series shortening removes only empty future occurrences and leaves the past intact", () => {
+  const context = recurrenceEditContext();
+  run(context, '__options.endDate = "2026-10-09"; __plan = buildSessionEditPlan(state.sessions[1], __data, __options)');
+  assert.equal(run(context, "__plan.valid"), true);
+  assert.deepEqual(jsonValue(context, "__plan.removed.map(item=>item.id)"), ["weekly-3"]);
+  assert.equal(run(context, "JSON.stringify(state) === __original"), true);
+  run(context, "applySessionEditPlan(__plan)");
+  assert.deepEqual(jsonValue(context, "state.sessions.map(item=>item.id)"), ["weekly-0", "weekly-1", "weekly-2"]);
+});
+
+test("series extensions retain the original weekday after an occurrence was moved independently", () => {
+  const context = recurrenceEditContext();
+  run(context, 'state.sessions[1].date = "2026-10-03"; __data.date = "2026-10-03"; __options.endDate = "2026-10-30"; __plan = buildSessionEditPlan(state.sessions[1], __data, __options)');
+  assert.equal(run(context, "__plan.valid"), true);
+  assert.deepEqual(jsonValue(context, "__plan.created.map(item=>item.date)"), ["2026-10-23", "2026-10-30"]);
+  assert.equal(run(context, "__plan.updated[0].date"), "2026-10-03");
+  run(context, 'applySessionEditPlan(__plan); __data = {...state.sessions[1]}; __options.endDate = "2026-11-06"; __plan = buildSessionEditPlan(state.sessions[1], __data, __options)');
+  assert.equal(run(context, "__plan.valid"), true);
+  assert.deepEqual(jsonValue(context, "__plan.created.map(item=>item.date)"), ["2026-11-06"]);
+});
+
+for (const history of [
+  'responses = [{id:"vote"}]', 'notes = "Keep this"', 'sent = {poll:"sent"}',
+  'manualAttendedPlayerIds = ["player-a"]', 'payments = {"player-a":{paidAmount:1}}'
+]) {
+  test(`series shortening is atomic with retained ${history.split(" =")[0]}`, () => {
+    const context = recurrenceEditContext();
+    run(context, `state.sessions[3].${history}; __before = JSON.stringify(state); __options.endDate = "2026-10-09"; __plan = buildSessionEditPlan(state.sessions[1], __data, __options)`);
+    assert.equal(run(context, "__plan.valid"), false);
+    assert.match(run(context, "__plan.message"), /history/);
+    assert.equal(run(context, "applySessionEditPlan(__plan)"), false);
+    assert.equal(run(context, "JSON.stringify(state) === __before"), true);
+  });
+}
+
+test("financial conflicts stop the entire series while court-number edits remain allowed", () => {
+  const context = recurrenceEditContext();
+  run(context, 'state.sessions[2].payments = {payer:{paidAmount:10}}; __before = JSON.stringify(state); __data.totalPaid = 150; __options.feeExplicit = true; __plan = buildSessionEditPlan(state.sessions[1], __data, __options)');
+  assert.equal(run(context, "__plan.valid"), false);
+  assert.match(run(context, "__plan.message"), /recorded payments/);
+  assert.equal(run(context, "JSON.stringify(state) === __before"), true);
+  run(context, '__data.totalPaid = 120; __data.courtBookings[0].courtNumbers = [6]; __plan = buildSessionEditPlan(state.sessions[1], __data, __options)');
+  assert.equal(run(context, "__plan.valid"), true);
+  assert.equal(run(context, "__plan.updated[1].payments.payer.paidAmount"), 10);
+});
+
+test("series date shifts retain IDs and weekly spacing without moving past sessions", () => {
+  const context = recurrenceEditContext();
+  run(context, '__data.date = "2026-10-03"; __options.endDate = "2026-10-17"; __plan = buildSessionEditPlan(state.sessions[1], __data, __options)');
+  assert.equal(run(context, "__plan.valid"), true);
+  assert.deepEqual(jsonValue(context, "__plan.updated.map(item=>[item.id,item.date,item.type])"), [
+    ["weekly-1", "2026-10-03", "Saturday"], ["weekly-2", "2026-10-10", "Saturday"], ["weekly-3", "2026-10-17", "Saturday"]
+  ]);
+  run(context, "applySessionEditPlan(__plan)");
+  assert.equal(run(context, "state.sessions[0].date"), "2026-09-25");
+});
+
+test("a series can stop repeating while preserving past sessions", () => {
+  const context = recurrenceEditContext();
+  run(context, '__options.frequency = "none"; __plan = buildSessionEditPlan(state.sessions[1], __data, __options)');
+  assert.equal(run(context, "__plan.valid"), true);
+  assert.deepEqual(jsonValue(context, "__plan.removed.map(item=>item.id)"), ["weekly-2", "weekly-3"]);
+  run(context, "applySessionEditPlan(__plan)");
+  assert.equal(run(context, "state.sessions.length"), 2);
+  assert.equal(run(context, "Boolean(state.sessions[1].recurrence)"), false);
+  assert.equal(run(context, "state.sessions[0].recurrence.id"), "series-1");
+});
+
+test("editing a one-time session to weekly retains its roster and ID without copying history", () => {
+  const context = recurrenceEditContext();
+  run(context, `
+    state.sessions = [state.sessions[1]];
+    delete state.sessions[0].recurrence;
+    state.sessions[0].responses = [{id:"original-vote"}];
+    __plan = buildSessionEditPlan(state.sessions[0], __data, {frequency:"weekly", endDate:"2026-10-16"});
+  `);
+  assert.equal(run(context, "__plan.valid"), true);
+  assert.equal(run(context, "__plan.updated[0].id"), "weekly-1");
+  assert.equal(run(context, "__plan.updated[0].responses[0].id"), "original-vote");
+  assert.equal(run(context, "__plan.created.length"), 2);
+  assert.deepEqual(jsonValue(context, "__plan.created.map(item=>item.responses)"), [[], []]);
+});
+
+test("series duplicate conflicts, invalid end dates and excessive ranges make no changes", () => {
+  const context = recurrenceEditContext();
+  run(context, 'state.sessions.push({...__data,id:"external",date:"2026-10-23",recurrence:null}); __before = JSON.stringify(state); __options.endDate = "2026-10-30"; __plan = buildSessionEditPlan(state.sessions[1], __data, __options)');
+  assert.equal(run(context, "__plan.valid"), false);
+  assert.match(run(context, "__plan.message"), /matching session/);
+  assert.equal(run(context, "JSON.stringify(state) === __before"), true);
+  for (const endDate of ["", "2026-10-01", "2028-10-01"]) {
+    context.__end = endDate;
+    assert.equal(run(context, "buildSessionEditPlan(state.sessions[1], __data, {...__options,endDate:__end}).valid"), false);
+  }
+});
+
+test("full-series editing from a past occurrence still only updates upcoming records", () => {
+  const context = recurrenceEditContext();
+  const before = jsonValue(context, "state.sessions[0]");
+  run(context, '__data.courtBookings[0].courtNumbers = [8]; __plan = buildSessionEditPlan(state.sessions[0], __data, __options)');
+  assert.equal(run(context, "__plan.valid"), true);
+  run(context, "applySessionEditPlan(__plan)");
+  assert.deepEqual(jsonValue(context, "state.sessions[0]"), before);
+  assert.equal(run(context, "__plan.selectedId"), "weekly-1");
+});
+
+test("recurrence edit UI exposes scope, saved repeat end and one-time conversion", () => {
+  const context = recurrenceEditContext();
+  const html = run(context, 'renderSessionModal("weekly-2")');
+  assert.match(html, /Full series \(3 upcoming\)/);
+  assert.match(html, /name="recurrenceEndDate"[^>]*value="2026-10-16"/);
+  assert.match(html, /data-session-repeat-controls disabled/);
+  run(context, "delete state.sessions[1].recurrence");
+  const onceHtml = run(context, 'renderSessionModal("weekly-1")');
+  assert.doesNotMatch(onceHtml, /name="editScope"/);
+  assert.doesNotMatch(onceHtml, /data-session-repeat-controls disabled/);
+  assert.match(onceHtml, /name="recurrence" value="none"[^>]*checked/);
+});
+
+test("series booking changes recalculate automatic fees and capacity while keeping manual values", () => {
+  const context = recurrenceEditContext();
+  run(context, `
+    state.sessions[1].totalPaid = 100;
+    state.sessions[1].perPersonAmount = 17;
+    state.sessions[2].totalPaid = 80;
+    state.sessions[2].expectedPlayers = 5;
+    state.sessions[2].perPersonAmount = 19;
+    __data = {...state.sessions[1],courtBookings:[{startTime:"19:00",endTime:"22:00",courts:2,courtNumbers:[2,4]}],bookedCourts:2,plannedCourts:2,endTime:"22:00",expectedPlayers:12,totalPaid:300,perPersonAmount:25};
+    __plan = buildSessionEditPlan(state.sessions[1], __data, __options);
+  `);
+  assert.equal(run(context, "__plan.valid"), true);
+  assert.deepEqual(jsonValue(context, "__plan.updated[0] && [__plan.updated[0].bookedCourts,__plan.updated[0].totalPaid,__plan.updated[0].expectedPlayers,__plan.updated[0].perPersonAmount]"), [2, 300, 12, 25]);
+  assert.deepEqual(jsonValue(context, "[__plan.updated[1].bookedCourts,__plan.updated[1].totalPaid,__plan.updated[1].expectedPlayers,__plan.updated[1].perPersonAmount]"), [2, 80, 5, 19]);
+  run(context, '__plan = buildSessionEditPlan(state.sessions[1], __data, {...__options,capacityExplicit:true,feeExplicit:true,rateExplicit:true})');
+  assert.deepEqual(jsonValue(context, "[__plan.updated[1].totalPaid,__plan.updated[1].expectedPlayers,__plan.updated[1].perPersonAmount]"), [300, 12, 25]);
+});
+
+test("in-progress and completed occurrences cannot be moved or removed by Full series", () => {
+  const context = recurrenceEditContext();
+  run(context, 'state.sessions[1].date = "2026-10-01"; state.sessions[1].startTime = "11:00"; state.sessions[2].stage = "Completed"; __data.date = "2026-10-16"; __data.courtBookings[0].courtNumbers = [9]; __plan = buildSessionEditPlan(state.sessions[1], __data, __options)');
+  assert.equal(run(context, "__plan.valid"), true);
+  assert.deepEqual(jsonValue(context, "__plan.updated.map(item=>item.id)"), ["weekly-3"]);
+  assert.equal(run(context, "__plan.removed.length"), 0);
+});
+
+test("Full series scope switches dates without discarding single-occurrence date edits", () => {
+  const context = recurrenceEditContext();
+  const result = jsonValue(context, `(() => {
+    const scope = {value:"series"};
+    const label = {textContent:"Date"};
+    const date = {value:"2026-10-10",closest:()=>({querySelector:()=>label})};
+    const controls = {disabled:true};
+    const submit = {textContent:"Save Session"};
+    const end = {value:"2026-10-16"};
+    const form = {dataset:{editId:"weekly-2"},elements:{date},querySelector(selector) {
+      if (selector === '[name="editScope"]:checked') return scope;
+      if (selector === '[name="recurrence"]:checked') return {value:"weekly"};
+      if (selector === '[data-session-repeat-controls]') return controls;
+      if (selector === '[data-session-recurrence-end]') return end;
+      if (selector === '[data-session-submit-label]') return submit;
+      return null;
+    }};
+    updateSessionEditScope(form);
+    const series = {date:date.value,label:label.textContent,locked:controls.disabled,submit:submit.textContent};
+    scope.value = "single";
+    updateSessionEditScope(form);
+    return {series,single:{date:date.value,label:label.textContent,locked:controls.disabled,submit:submit.textContent}};
+  })()`);
+  assert.deepEqual(result, {
+    series:{date:"2026-10-02",label:"First Upcoming Session",locked:false,submit:"Save Full Series"},
+    single:{date:"2026-10-10",label:"Date",locked:true,submit:"Save Session"}
+  });
+});
+
+test("series edits reject moving occurrences into the past and conversion of completed one-time sessions", () => {
+  const context = recurrenceEditContext();
+  run(context, '__data.date = "2026-09-25"; __plan = buildSessionEditPlan(state.sessions[1], __data, __options)');
+  assert.equal(run(context, "__plan.valid"), false);
+  assert.match(run(context, "__plan.message"), /future/);
+  run(context, 'delete state.sessions[0].recurrence; __data = {...state.sessions[0]}; __plan = buildSessionEditPlan(state.sessions[0], __data, {frequency:"weekly",endDate:"2026-10-30"})');
+  assert.equal(run(context, "__plan.valid"), false);
+  assert.match(run(context, "__plan.message"), /Past sessions/);
 });
 
 test("message court placeholder uses venue suffix after at-sign with area", () => {
