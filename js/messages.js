@@ -31,7 +31,7 @@ function messageTimeRange(session, compact = false) {
 
 function sessionCourtSlotBreakdownText(session) {
   return sessionCourtSlots(session)
-    .map((slot) => `${messageTimeRange(slot, true)}: ${slot.courts} ${slot.courts === 1 ? "court" : "courts"}`)
+    .map((slot) => `${messageTimeRange(slot, true)}: ${courtSlotDescription(slot)}`)
     .join("; ");
 }
 
@@ -131,7 +131,17 @@ function buildPollMessage(session) {
 }
 
 function buildFinalListMessage(session) {
-  return renderTemplate(state.settings.finalListTemplate || defaultFinalListTemplate(), templateData(session));
+  const template = state.settings.finalListTemplate || defaultFinalListTemplate();
+  const values = templateData(session);
+  const message = renderTemplate(template, values);
+  return values.court_bookings && !/\{\{\s*(player_list_sections|court_sections|court_bookings)\s*\}\}/.test(template)
+    ? `${message}\n\n${values.court_bookings}` : message;
+}
+
+function messageCourtGroupHeading(allocation, index) {
+  const court = allocation.courts[index];
+  if (!court) return `${allocation.hasBookedCourtNumbers ? "Player Group" : "Court"} ${index + 1}`;
+  return `${court.label || `Court ${court.number}`}${court.availability ? ` (${court.availability})` : ""}`;
 }
 
 function confirmedVotingEntries(allocation) {
@@ -160,7 +170,7 @@ function listCourtSectionsByVoteOrder(allocation, playersPerCourt) {
     sections.push(confirmed.slice(index, index + courtSize));
   }
   return sections
-    .map((entries, index) => [`🏸 Court ${index + 1}`, entries.map((entry, entryIndex) => `${entryIndex + 1}. ${entry.name}`).join("\n")].join("\n"))
+    .map((entries, index) => [`🏸 ${messageCourtGroupHeading(allocation, index)}`, entries.map((entry, entryIndex) => `${entryIndex + 1}. ${entry.name}`).join("\n")].join("\n"))
     .join("\n\n");
 }
 
@@ -173,7 +183,7 @@ function listMessageCourtSectionsByVoteOrder(allocation, playersPerCourt) {
   }
   return sections
     .map((entries, index) => [
-      `${String.fromCodePoint(0x1f3f8)} Court ${index + 1}`,
+      `${String.fromCodePoint(0x1f3f8)} ${messageCourtGroupHeading(allocation, index)}`,
       entries.map((entry, entryIndex) => `${entryIndex + 1}. ${messageEntryName(entry)}`).join("\n")
     ].join("\n"))
     .join("\n\n");
@@ -196,17 +206,15 @@ function messageGuestIndex(entry) {
 
 function templateData(session) {
   const court = getCourt(session.courtId);
-  const allocation = allocateSession(session);
+  const allocation = sessionCourtAllocationDisplay(session);
   const playersPerCourt = getPlayersPerCourt(session);
   const listTitle = finalListTitle(session, allocation, playersPerCourt);
   const playerListSections = listMessageCourtSectionsByVoteOrder(allocation, playersPerCourt);
-  const courtSections = allocation.courts
-    .map((courtItem) => {
-      const players = courtItem.players.map((entry, index) => `${index + 1}. ${messageEntryName(entry)}`).join("\n");
-      const empty = Array.from({ length: Math.max(0, playersPerCourt - courtItem.players.length) }, (_, index) => `${courtItem.players.length + index + 1}.`).join("\n");
-      return [`🏸 Court ${courtItem.number}`, players, empty].filter(Boolean).join("\n");
-    })
-    .join("\n\n");
+  const slots = sessionCourtSlots(session);
+  const courtBookings = slots.some((slot) => slot.courtNumbers?.length)
+    ? `*Booked Courts*\n${slots.map((slot) => `${messageTimeRange(slot, true)}: ${courtSlotDescription(slot)}`).join("\n")}` : "";
+  const templateHasBookings = /\{\{\s*court_bookings\s*\}\}/.test(state.settings.finalListTemplate || defaultFinalListTemplate());
+  const publishedSections = [templateHasBookings ? "" : courtBookings, playerListSections || "No confirmed players yet"].filter(Boolean).join("\n\n");
   const waiting = allocation.waiting.length
     ? allocation.waiting.map((entry, index) => `${index + 1}. ${messageEntryName(entry)}`).join("\n")
     : "No waiting list";
@@ -222,8 +230,9 @@ function templateData(session) {
     total_paid: currency(session.totalPaid),
     per_person_amount: currency(session.perPersonAmount),
     list_title: listTitle,
-    player_list_sections: playerListSections || "No confirmed players yet",
-    court_sections: playerListSections || "No confirmed players yet",
+    player_list_sections: publishedSections,
+    court_sections: publishedSections,
+    court_bookings: courtBookings,
     waiting_list: waiting,
     final_list_cancellation_notice: finalListCancellationNotice(session, allocation),
     shuttle_cost: session.shuttleCost || state.settings.defaultShuttleCost,

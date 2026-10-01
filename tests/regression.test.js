@@ -2549,6 +2549,156 @@ test("legacy water and recurrence-count defaults are removed without changing se
   assert.equal(run(context, "Object.hasOwn(state.settings, 'defaultRecurrenceWeeks')"), false);
 });
 
+test("booked court numbers survive normalization, cloud serialization and session editing", () => {
+  const context = createAppContext();
+  const bookings = [
+    { startTime: "19:00", endTime: "21:00", courts: 2, courtNumbers: [2, 4] },
+    { startTime: "19:00", endTime: "20:00", courts: 1, courtNumbers: [6] }
+  ];
+  setAppState(context, baseFixture({ sessions: [baseSession({ courtBookings: bookings, expectedPlayers: 16 })] }));
+  assert.deepEqual(jsonValue(context, "state.sessions[0].courtBookings"), bookings);
+  assert.deepEqual(jsonValue(context, "normalizeSession(jsonFromFirestoreValue(firestoreValueFromJson(state.sessions[0]))).courtBookings"), bookings);
+  assert.deepEqual(jsonValue(context, "sessionCourtSlots(state.sessions[0])"), [
+    { startTime: "19:00", endTime: "20:00", courts: 3, courtNumbers: [2, 4, 6] },
+    { startTime: "20:00", endTime: "21:00", courts: 2, courtNumbers: [2, 4] }
+  ]);
+  assert.equal(run(context, "sessionCourtHours(state.sessions[0])"), 5);
+  assert.equal(run(context, "allocateSession(state.sessions[0]).capacity"), 16);
+  assert.deepEqual(jsonValue(context, "sessionCourtAllocationDisplay(state.sessions[0]).courts.map(court => court.number)"), [2, 4, 6]);
+  assert.equal(run(context, "sessionCourtAllocationDisplay(state.sessions[0]).courts[2].availability"), "7:00 to 8:00 PM");
+  assert.deepEqual(jsonValue(context, "allocateSession(state.sessions[0]).courts.map(court => court.number)"), [1, 2, 3]);
+  const html = run(context, 'renderSessionModal("session-1")');
+  assert.match(html, /name="slotCourtNumbers" value="2, 4"/);
+  assert.match(html, /name="slotCourtNumbers" value="6"/);
+  assert.match(run(context, "renderSessionCard(state.sessions[0])"), /Courts 2, 4, 6/);
+  assert.match(run(context, "renderCourtAllocationTab(state.sessions[0])"), /Court 6/);
+});
+
+test("court numbers reject bad values, duplicates, missing rows and overlapping physical courts", () => {
+  const context = createAppContext();
+  const row = { startTime: "19:00", endTime: "21:00", courts: 2 };
+  for (const numbers of ["2", "2, 2", "0, 2", "-1, 2", "2.5, 4", "2, x", "2, <script>", "2, 9007199254740992"]) {
+    context.__bookings = [{ ...row, courtNumbers: numbers }];
+    assert.equal(run(context, "validateCourtSlots(__bookings).valid"), false, numbers);
+    assert.equal(run(context, "courtSlotCourtHours(__bookings)"), 4, "labels must not change the fee while typing");
+    assert.equal(run(context, "courtSlotMaxCourts(__bookings)"), 2);
+  }
+  context.__bookings = [{ ...row, courtNumbers: " 02, 4 " }];
+  assert.deepEqual(jsonValue(context, "validateCourtSlots(__bookings).slots[0].courtNumbers"), [2, 4]);
+  context.__bookings = [{ ...row, courtNumbers: [2, 4] }, { startTime: "20:00", endTime: "22:00", courts: 1, courtNumbers: [4] }];
+  assert.match(run(context, "validateCourtSlots(__bookings).message"), /overlapping/);
+  context.__bookings[1].courtNumbers = [];
+  assert.match(run(context, "validateCourtSlots(__bookings).message"), /Booking 2/);
+  context.__bookings.forEach((booking) => delete booking.courtNumbers);
+  assert.equal(run(context, "validateCourtSlots(__bookings).valid"), true, "legacy unnumbered bookings remain supported");
+});
+
+test("court identities retain equal-count changes and permit adjacent overnight reuse", () => {
+  const context = createAppContext();
+  context.__bookings = [
+    { startTime: "23:00", endTime: "00:00", courts: 2, courtNumbers: [2, 4] },
+    { startTime: "00:00", endTime: "01:00", courts: 2, courtNumbers: [4, 6] }
+  ];
+  assert.deepEqual(jsonValue(context, "validateCourtSlots(__bookings).slots"), context.__bookings);
+  assert.equal(run(context, "courtSlotCourtHours(__bookings)"), 4);
+  context.__bookings[1].courtNumbers = [4, 2];
+  assert.deepEqual(jsonValue(context, "validateCourtSlots(__bookings).slots"), [
+    { startTime: "23:00", endTime: "01:00", courts: 2, courtNumbers: [2, 4] }
+  ]);
+  context.__bookings[1].startTime = "23:30";
+  assert.equal(run(context, "validateCourtSlots(__bookings).valid"), false);
+});
+
+test("editing only court numbers does not change financial basis or recurrence duplicate detection", () => {
+  const context = createAppContext();
+  context.__original = baseSession({ bookedCourts: 2, plannedCourts: 2, payments: { p1: { amount: 20, paidAmount: 20 } } });
+  context.__labeled = { ...context.__original, courtBookings: [{ startTime: "19:00", endTime: "21:00", courts: 2, courtNumbers: [2, 4] }] };
+  assert.equal(run(context, "sessionFinancialBasisChanged(__original, __labeled)"), false);
+  assert.equal(run(context, "sessionScheduleKey(__original) === sessionScheduleKey(__labeled)"), true);
+  context.__labeled.courtBookings[0].endTime = "22:00";
+  assert.equal(run(context, "sessionFinancialBasisChanged(__original, __labeled)"), true);
+});
+
+test("numbered bookings are independent across recurring sessions", () => {
+  const context = createAppContext();
+  setAppState(context, baseFixture());
+  context.__base = baseSession({ date: "2026-10-03", courtBookings: [{ startTime: "19:00", endTime: "21:00", courts: 2, courtNumbers: [2, 4] }] });
+  run(context, "globalThis.__created = buildNewSessionRecords(__base, { frequency: 'weekly', endDate: '2026-10-17' }, [])");
+  assert.equal(run(context, "__created.valid"), true);
+  assert.equal(run(context, "__created.records.length"), 3);
+  run(context, "__created.records[0].courtBookings[0].courtNumbers[0] = 8");
+  assert.deepEqual(jsonValue(context, "__created.records[1].courtBookings[0].courtNumbers"), [2, 4]);
+  assert.deepEqual(context.__base.courtBookings[0].courtNumbers, [2, 4]);
+});
+
+test("published lists include actual booked courts for saved templates without changing poll copy", () => {
+  const context = createAppContext();
+  setAppState(context, baseFixture({
+    players: [player("p1", "Player One")],
+    sessions: [baseSession({ courtBookings: [{ startTime: "19:00", endTime: "21:00", courts: 1, courtNumbers: [4] }], responses: [{ id: "r1", playerId: "p1", voteOrder: 1, attendanceChoice: "in" }] })]
+  }));
+  const poll = run(context, "buildPollMessage(state.sessions[0])");
+  const originalPlayers = jsonValue(context, "allocateSession(state.sessions[0]).courts.map(court => court.players)");
+  for (const template of ["{{player_list_sections}}", "{{court_sections}}", "{{court_bookings}}\n{{player_list_sections}}", "Custom list"]) {
+    context.__template = template;
+    run(context, "state.settings.finalListTemplate = __template");
+    const message = run(context, "buildFinalListMessage(state.sessions[0])");
+    assert.match(message, /7:00 to 9:00 PM: Court 4/);
+    assert.equal((message.match(/\*Booked Courts\*/g) || []).length, 1);
+    assert.doesNotMatch(message, /Court 1\b/);
+  }
+  run(context, "delete state.sessions[0].courtBookings");
+  assert.equal(run(context, "buildPollMessage(state.sessions[0])"), poll);
+  assert.deepEqual(jsonValue(context, "allocateSession(state.sessions[0]).courts.map(court => court.players)"), originalPlayers);
+});
+
+test("manual capacity beyond booked courts preserves legacy copy without inventing numbered courts", () => {
+  const context = createAppContext();
+  const players = Array.from({ length: 7 }, (_, index) => player(`p${index}`, `Player ${index}`));
+  setAppState(context, baseFixture({ players, sessions: [baseSession({
+    expectedPlayers: 7,
+    responses: players.map((item, index) => ({ id: `r${index}`, playerId: item.id, voteOrder: index + 1, attendanceChoice: "in" }))
+  })] }));
+  assert.match(run(context, "buildFinalListMessage(state.sessions[0])"), /Court 2/);
+  run(context, "state.sessions[0].courtBookings = [{ startTime: '19:00', endTime: '21:00', courts: 1, courtNumbers: [4] }]");
+  const message = run(context, "buildFinalListMessage(state.sessions[0])");
+  assert.match(message, /Court 4/);
+  assert.match(message, /Player Group 2/);
+  assert.doesNotMatch(message, /Court 2/);
+  assert.match(message, /Player 6/);
+});
+
+test("changing physical court sets uses time breakdown instead of inventing fixed assignments", () => {
+  const context = createAppContext();
+  setAppState(context, baseFixture({
+    players: [player("p1", "Player One")],
+    sessions: [baseSession({
+      courtBookings: [
+        { startTime: "19:00", endTime: "20:00", courts: 1, courtNumbers: [4] },
+        { startTime: "20:00", endTime: "21:00", courts: 1, courtNumbers: [6] }
+      ], responses: [{ id: "r1", playerId: "p1", voteOrder: 1, attendanceChoice: "in" }]
+    })]
+  }));
+  const message = run(context, "buildFinalListMessage(state.sessions[0])");
+  assert.match(message, /7:00 to 8:00 PM: Court 4/);
+  assert.match(message, /8:00 to 9:00 PM: Court 6/);
+  assert.match(message, /Player Group 1/);
+  assert.doesNotMatch(message, /Court 1\b/);
+});
+
+test("invalid imported court labels do not change valid booking costs", () => {
+  const context = createAppContext();
+  setAppState(context, baseFixture({ sessions: [baseSession({
+    courtBookings: [
+      { startTime: "19:00", endTime: "21:00", courts: 2, courtNumbers: [2, 4] },
+      { startTime: "19:00", endTime: "20:00", courts: 1, courtNumbers: [4] }
+    ]
+  })] }));
+  assert.equal(run(context, "sessionCourtHours(state.sessions[0])"), 5);
+  assert.equal(run(context, "sessionMaxCourts(state.sessions[0])"), 3);
+  assert.equal(run(context, "validateCourtSlots(state.sessions[0].courtBookings).valid"), false);
+});
+
 test("legacy variable court slots derive operations while preserving explicit capacity", () => {
   const context = createAppContext();
   const slots = [
