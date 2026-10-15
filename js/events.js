@@ -1542,9 +1542,7 @@ async function handleSubmit(event) {
     const result = applyPlayerPayment(data.playerId, amountPaid);
     saveState();
     if (result.applied > 0 || result.remaining > 0) {
-      const appliedText = result.applied > 0 ? `Applied ${currency(result.applied)}.` : "";
-      const creditText = result.remaining > 0 ? ` ${currency(result.remaining)} added as Credit.` : "";
-      showToast(`${appliedText}${creditText}`.trim());
+      showToast(`${currency(amountPaid)} payment recorded from ${getPlayerName(data.playerId)}.`);
     } else {
       showToast("No pending amount for this player.");
     }

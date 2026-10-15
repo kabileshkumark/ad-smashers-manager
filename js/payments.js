@@ -1415,9 +1415,8 @@ function allocateLedgerCoverageSnapshot(sourceInputs, ledgerInputs) {
     let creditApplied = 0;
     groupSources.forEach(({ playerId, source }) => {
       const summary = playerSummaries.get(playerId);
-      const eligibleDetails = source.type === "advance" || playerId === group.payerId
-        ? detailsList : ledgersByPlayer.get(playerId) || [];
-      const allocation = allocateChronologicalCoverage(eligibleDetails, [source], { payerId: playerId, groupId: group.id });
+      // Any member can fund group dues; retain the source owner for unused funds and reversals.
+      const allocation = allocateChronologicalCoverage(detailsList, [source], { payerId: playerId, groupId: group.id });
       if (summary) {
         summary.advanceApplied = ledgerMoney(summary.advanceApplied + allocation.advanceApplied);
         summary.groupAdvanceProvided = ledgerMoney(summary.groupAdvanceProvided + allocation.groupAdvanceApplied);
@@ -2659,9 +2658,14 @@ function paymentGroupMemberNames(group) {
 }
 
 function paymentGroupTransactions(groupId) {
+  const memberIds = new Set(paymentGroupPlayerIds(getPaymentGroup(groupId)));
   return [...(state.paymentTransactions || [])]
     .map((transaction, index) => ({ transaction, index }))
-    .filter(({ transaction }) => transaction.groupId === groupId)
+    .filter(({ transaction }) => transaction.groupId === groupId || (
+      !transaction.groupId
+      && ["player-payment", "advance-payment"].includes(transaction.type)
+      && memberIds.has(transaction.paidById)
+    ))
     .sort((a, b) => (
       String(b.transaction.createdAt || b.transaction.date || "").localeCompare(String(a.transaction.createdAt || a.transaction.date || ""))
       || b.index - a.index

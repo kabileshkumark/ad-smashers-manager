@@ -22,6 +22,16 @@ The test suite uses Node's built-in test runner and does not require extra packa
 
 ## Current Automated Coverage
 
+### Any-Member Group Contributions (Build 1.0.22)
+
+- FR-PAY-032: any member's available Credit or Advance can cover the active saved group's dues. Default payer no longer gates Credit eligibility. Unused funds remain owned by their contributor.
+- A three-member group owing 25 each clears after any member records 75 individually. Assert agreement across group/player cards, session dues, Dashboard, reminders and full summaries, without rewriting the receipt.
+- Partial payments, exact settlement, excess cash and cents conserve funds. Older member Credit is consumed before a newer Advance. Unrelated players and inactive groups cannot supply group funding; overlapping groups cannot spend a source twice.
+- Reverse and Delete reopen the correct dues; subsequent payments reallocate normally. Backup reload, later charges and archival of a fully settled contributor retain ownership and history.
+- Group history includes member individual/Advance receipts and reversals, but not unrelated receipts or ungrouped adjustment logs. Advance rows are not mislabeled as Credit.
+- 265 automated tests passed in approved QA. Browser checks passed at 320, 390 and 1280 pixels; a mobile test reversed and re-entered a member's payment through the UI. Controls remained square and on one row, with no horizontal overflow, page errors or external requests. Physical-device testing is not newly claimed.
+- The private October 15 backup was replayed against the previous code: only the affected group's three player balances changed, all other player/group balances were unchanged, and stored records remained identical. A fresh consistent production export matched the normalized QA data before release.
+
 ### Recurring Session Editing (Build 1.0.21)
 
 - FR-SES-033: edit one occurrence or the Full series. This session is the default; Full series includes upcoming occurrences only, excluding past, in-progress and Completed / Payment Collection records.
@@ -84,8 +94,8 @@ The regression suite in `tests/regression.test.js` loads the same browser JavaSc
   - clear players last.
 - Saved payment groups can include named guests and keep those guest names in the group member summary.
 - Post-game overpayments become Credit owned only by the payer.
-- A payment-group payer's remaining Credit reduces the group's cash payable amount, is consumed before new cash, and is restored exactly if that group-payment transaction is deleted.
-- Intentional Advance remains in the Advance section. After covering the payer's own dues, the remaining Advance covers active members of each saved payment group before the payer's Credit is used.
+- Any payment-group member's remaining Credit reduces the group's cash payable amount through canonical allocations; unused funds remain theirs. Reversing or deleting the source receipt removes its financial effect exactly.
+- Intentional Advance remains distinct from Credit. Available sources are consumed in date/timestamp/order sequence across eligible group charges, not by a blanket Advance-before-Credit rule.
 - The transaction trash dialog offers Reverse and Delete: both undo the exact financial effect; Reverse retains an audit row while Delete removes it. An already-reversed receipt offers Delete only. Migrated and adjustment records allow neither action.
 - Activities support one or more unique payers whose positive contributions must equal the activity total.
 - Activity allocation supports Equal, Manual, Percentage, and No. of Shares modes with exact-cent totals and invalid-input rejection.
@@ -117,9 +127,9 @@ After `npm test` passes, check these once in the app for larger UI or deployment
   - due players should appear first,
   - players with positive Credit should appear after dues,
   - clear players should appear last.
-  - for a group payer with remaining Credit and another member with a due, confirm the group shows the net cash payable amount,
-  - apply the group payment and confirm Credit is used before cash, the member due clears, and payment history records the Credit used.
-  - for a group payer with intentional Advance, confirm the payer's own dues are covered first, member dues are then covered, the individual and group rows agree, and the payer's Advance history names member deductions.
+  - for any group member with remaining Credit and another member with a due, confirm the group shows the net cash payable amount,
+  - record an individual member payment and confirm its available funding covers group dues, the contributor is identifiable, and their receipt appears in group history.
+  - for a group member with intentional Advance, confirm chronological funding order, individual/group agreement and per-member usage in Advance history.
   - use Reverse on a test receipt and confirm the reversed audit row remains; then delete that reversed row and confirm every balance remains unchanged,
   - use Delete on another active test receipt and confirm its financial effect is undone and no audit row remains.
   - at 320 px and 390 px widths, confirm each Payment Group name remains on one line, all five actions stay in the top-right row, the status chip sits below, and the empty amount field shows only a faint `0` placeholder.

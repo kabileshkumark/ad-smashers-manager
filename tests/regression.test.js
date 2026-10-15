@@ -1487,8 +1487,8 @@ test("payment summary previews use current ledger totals and keep history transa
   assert.match(text, /Due before adjustments: 40 AED/);
   assert.match(text, /Credit applied: 5 AED/);
   assert.match(text, /\*Amount due: 35 AED\*/);
-  assert.match(text, /\*Pending items\*[\s\S]*Dinner: 10 AED/);
-  assert.equal((text.match(/session: (?:20|5) AED/g) || []).length, 2);
+  assert.match(text, /\*Pending items\*[\s\S]*Dinner: 5 AED/);
+  assert.equal((text.match(/session: (?:20|10) AED/g) || []).length, 2);
   assert.doesNotMatch(text, /Advance applied/);
   assert.doesNotMatch(text, /Payment Transactions|Cash recorded|Attendance:/);
   assert.match(text, /_This is an automated message generated via AD Smashers Manager app\._$/);
@@ -1762,17 +1762,146 @@ test("reversing a clearing payment reopens the earlier due period", () => {
   assertDueStatementReconciles(context, ["a"]);
 });
 
-test("due statement does not silently net a non-payer's personal Credit against another member's due", () => {
+test("due statement applies any group member's Credit as a contribution to group dues", () => {
   const context = createAppContext();
   setAppState(context, { ...groupSummaryFixture(["a", "b"], 100), advances: { b: 150 } });
   const text = run(context, 'buildPaymentGroupReminderCopy("summary-group")');
   assert.match(text, /Total Used: 200 AED/);
   assert.match(text, /Total Contributions: 150 AED/);
-  assert.match(text, /Amount Due: 100 AED/);
-  assert.match(text, /Credit Remaining: 50 AED/);
+  assert.match(text, /Amount Due: 50 AED/);
+  assert.doesNotMatch(text, /Credit Remaining/);
   assertDueStatementReconciles(context, ["a", "b"]);
   const personal = run(context, 'buildPlayerPaymentReminderCopy("a")');
-  assert.doesNotMatch(personal, /B \(Credit|Credit Remaining/);
+  assert.match(personal, /B \(Credit carried forward\): 100 AED/);
+  assert.doesNotMatch(personal, /Credit Remaining/);
+});
+
+test("individual payment from any group member settles the group without rewriting the receipt", () => {
+  for (const payer of ["a", "b", "c"]) {
+    const context = createAppContext();
+    setAppState(context, groupSummaryFixture(["a", "b", "c"], 25));
+    run(context, `applyPlayerPayment("${payer}", 75)`);
+    const before = jsonValue(context, "state");
+    const totals = jsonValue(context, `withLedgerCoverageSnapshotCache(() => ({
+      due: paymentGroupBalance(getPaymentGroup("summary-group")),
+      players: ["a", "b", "c"].map(id => [playerBalance(id), playerRemainingCredit(id)]),
+      dashboard: dashboardPaymentTotals(state.sessions),
+      sessionDues: Object.values(state.sessions[0].payments).map(p => paymentOutstandingAfterCoverage(p, state.sessions[0]))
+    }))`);
+    assert.equal(totals.due, 0);
+    assert.deepEqual(totals.players, [[0, 0], [0, 0], [0, 0]]);
+    assert.deepEqual(totals.sessionDues, [0, 0, 0]);
+    assert.equal(totals.dashboard.outstanding, 0);
+    assert.equal(totals.dashboard.covered, 75);
+    const reminder = run(context, 'buildPaymentGroupReminderCopy("summary-group")');
+    assert.match(reminder, /Total Contributions: 75 AED[\s\S]*Total Used: 75 AED[\s\S]*Amount Due: 0 AED/);
+    assert.doesNotMatch(reminder, /Credit Remaining|Aani/);
+    assert.match(run(context, 'buildPaymentGroupSummaryCopy("summary-group")'), new RegExp(`${payer.toUpperCase()} paid 75 AED`));
+    for (const ids of [["a"], ["b"], ["c"], ["a", "b", "c"]]) assertDueStatementReconciles(context, ids);
+    assert.deepEqual(jsonValue(context, "state"), before);
+    run(context, 'state = restoreStateFromBackup(JSON.parse(JSON.stringify(state)))');
+    assert.equal(run(context, 'buildPaymentGroupReminderCopy("summary-group")'), reminder);
+  }
+});
+
+test("group member contributions handle partial payments and retain unused Credit with the contributor", () => {
+  for (const amount of [10, 25, 50, 75, 100, 100.01]) {
+    const context = createAppContext();
+    setAppState(context, groupSummaryFixture(["a", "b", "c"], 25));
+    run(context, `applyPlayerPayment("b", ${amount})`);
+    assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("summary-group"))'), Math.max(0, 75 - amount));
+    assert.equal(run(context, 'playerRemainingCredit("b")'), Number(Math.max(0, amount - 75).toFixed(2)));
+    assert.equal(run(context, 'playerRemainingCredit("a") + playerRemainingCredit("c")'), 0);
+    assert.equal(run(context, 'playerRemainingAdvance("b")'), 0);
+    for (const ids of [["a"], ["b"], ["c"], ["a", "b", "c"]]) assertDueStatementReconciles(context, ids);
+  }
+});
+
+test("reversing or deleting a member contribution reopens the correct group dues", () => {
+  for (const action of ["reversePaymentTransaction", "deleteActivePaymentTransaction"]) {
+    const context = createAppContext();
+    setAppState(context, groupSummaryFixture(["a", "b", "c"], 25));
+    run(context, 'applyPlayerPayment("b", 75); applyPlayerPayment("c", 10)');
+    assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("summary-group"))'), 0);
+    assert.equal(run(context, 'playerRemainingCredit("c")'), 10);
+    assert.equal(run(context, `${action}(state.paymentTransactions[0].id)`), true);
+    assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("summary-group"))'), 65);
+    assert.equal(run(context, 'playerRemainingCredit("b") + playerRemainingCredit("c")'), 0);
+    assertDueStatementReconciles(context, ["a", "b", "c"]);
+    run(context, 'state = restoreStateFromBackup(JSON.parse(JSON.stringify(state)))');
+    assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("summary-group"))'), 65);
+    assert.equal(run(context, 'state.paymentTransactions.filter(t => t.status === "reversed").length'), action === "reversePaymentTransaction" ? 1 : 0);
+  }
+});
+
+test("member Credit is spent once across overlapping groups without covering unrelated players", () => {
+  const context = createAppContext();
+  const fixture = groupSummaryFixture(["a", "b", "c", "d", "e"], 25);
+  fixture.paymentGroups = [
+    { id: "ab", name: "AB", payerId: "a", playerIds: ["a", "b"], active: true },
+    { id: "bc", name: "BC", payerId: "c", playerIds: ["b", "c"], active: true },
+    { id: "de", name: "DE", payerId: "d", playerIds: ["d", "e"], active: false }
+  ];
+  fixture.advances = { e: 100 };
+  setAppState(context, fixture);
+  run(context, 'applyPlayerPayment("b", 60)');
+  assert.deepEqual(jsonValue(context, 'withLedgerCoverageSnapshotCache(() => ["a", "b", "c", "d", "e"].map(id => playerBalance(id)))'), [0, 0, 15, 25, 0]);
+  assert.equal(run(context, 'playerRemainingCredit("e")'), 75);
+  const sourcesConserved = run(context, `withLedgerCoverageSnapshotCache(() => {
+    const snapshot = ledgerCoverageSnapshot();
+    return [...snapshot.coverageSourcesByPlayer].every(([owner, sources]) => sources.every(source => {
+      const applied = [...snapshot.items.values()].reduce((sum, item) => sum + item.creditSourceAllocations
+        .filter(allocation => allocation.payerId === owner && allocation.sourceId === source.id)
+        .reduce((total, allocation) => total + allocation.amount, 0), 0);
+      return ledgerMoney(source.amount - applied - source.remaining) === 0;
+    }));
+  })`);
+  assert.equal(sourcesConserved, true);
+});
+
+test("group history includes member receipts and reversals while excluding unrelated payments and adjustment logs", () => {
+  const context = createAppContext();
+  const fixture = groupSummaryFixture(["a", "b", "c"], 25);
+  fixture.players.push(player("outside", "Outside"));
+  setAppState(context, fixture);
+  run(context, `
+    applyPlayerPayment("outside", 100);
+    applyPlayerPayment("b", 75);
+    recordPlayerAdvance("c", 10);
+    state.paymentTransactions.push({id:"audit",type:"session-payment-adjustment",paidById:"b",playerIds:["b"]});
+  `);
+  const receipts = jsonValue(context, 'paymentGroupTransactions("summary-group")');
+  assert.equal(receipts.length, 2);
+  assert.deepEqual(receipts.map(t => t.paidById).sort(), ["b", "c"]);
+  const html = run(context, 'renderGroupPaymentHistoryModal("summary-group")');
+  assert.match(html, /Player Payment[\s\S]*paid by B/);
+  assert.match(html, /Advance Payment[\s\S]*Advance received 10 AED/);
+  assert.doesNotMatch(html, /Outside|Adjustment|10 AED Credit added/);
+  assert.match(run(context, 'renderPaymentGroupCard(getPaymentGroup("summary-group"))'), /Default payer: A - 3 members/);
+  run(context, 'reversePaymentTransaction(state.paymentTransactions.find(t => t.paidById === "b").id)');
+  assert.equal(run(context, 'paymentGroupTransactions("summary-group").length'), 2);
+  assert.match(run(context, 'renderGroupPaymentHistoryModal("summary-group")'), /Reversed/);
+  run(context, 'deleteReversedPaymentTransaction(state.paymentTransactions.find(t => t.paidById === "b").id)');
+  assert.equal(run(context, 'paymentGroupTransactions("summary-group").length'), 1);
+});
+
+test("non-default contributor Credit covers later group dues and survives archival once settled", () => {
+  const context = createAppContext();
+  const fixture = groupSummaryFixture(["a", "b", "c"], 25);
+  fixture.sessions[0].date = isoDateFromToday(-2);
+  setAppState(context, fixture);
+  run(context, 'applyGroupPayment({paidById:"b",playerIds:["a","b","c"],amountPaid:100,groupId:"summary-group"})');
+  assert.equal(run(context, 'playerRemainingCredit("b")'), 25);
+  context.__next = baseSession({id: "next-session", date: isoDateFromToday(-1), perPersonAmount: 25,
+    responses: [{id: "next-a", playerId: "a", attendanceChoice: "in", guestCount: 0}]});
+  run(context, 'state.sessions.push(normalizeSession(__next)); syncSessionPayments(state.sessions[1]);');
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("summary-group"))'), 0);
+  assert.equal(run(context, 'playerRemainingCredit("b")'), 0);
+  const receipts = jsonValue(context, 'state.paymentTransactions');
+  run(context, 'saveState = () => {}; showToast = () => {};');
+  assert.equal(run(context, 'executeConfirmedDelete({dataset:{deleteType:"player",player:"b"}})'), true);
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("summary-group"))'), 0);
+  assert.deepEqual(jsonValue(context, 'state.paymentTransactions'), receipts);
 });
 
 test("due-period totals reconcile across repeated payments, advances and group members", () => {
@@ -1992,8 +2121,10 @@ test("group summary uses activity net charges without counting vendor contributi
   assert.match(text, /30 AED split share; 0 AED payable to organizer/);
   assert.match(text, /No recorded payment receipts/);
   assert.doesNotMatch(text, /B paid 60 AED|A paid 30 AED/);
-  assert.match(text, /B - Credit remaining: 30 AED/);
-  assert.match(text, /Remaining due: 30 AED/);
+  assert.match(text, /Credit applied: 30 AED/);
+  assert.doesNotMatch(text, /Credit remaining/);
+  assert.match(text, /Remaining due: 0 AED/);
+  assertDueStatementReconciles(context, ["a", "b", "c"]);
 });
 
 test("group advance summaries combine deposits and split usage by member without changing ownership", () => {
@@ -2093,19 +2224,20 @@ test("oldest group advance is based on deposit time even if stored transaction o
   assert.deepEqual(jsonValue(context, 'playerAdvanceSummary("a")'), { received: 300, deducted: 200, balance: 100 });
 });
 
-test("group advances preserve personal Credit restrictions and can be permanently deleted", () => {
+test("group advances follow older member Credit and can be permanently deleted", () => {
   const context = createAppContext();
   const fixture = groupSummaryFixture(["a", "b", "c", "d"]);
   fixture.paymentGroups[0].payerId = "d";
   fixture.advances = { b: 150 };
   setAppState(context, fixture);
   run(context, 'recordPlayerAdvance("a", 300)');
-  assert.equal(run(context, 'playerRemainingCredit("b")'), 50);
-  assert.equal(run(context, 'playerAdvanceSummary("a").deducted'), 300);
+  assert.equal(run(context, 'playerRemainingCredit("b")'), 0);
+  assert.equal(run(context, 'playerAdvanceSummary("a").deducted'), 250);
+  assert.equal(run(context, 'playerRemainingAdvance("a")'), 50);
   assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("summary-group"))'), 0);
   run(context, 'deleteActivePaymentTransaction(state.paymentTransactions[0].id)');
-  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("summary-group"))'), 300);
-  assert.equal(run(context, 'playerRemainingCredit("b")'), 50);
+  assert.equal(run(context, 'paymentGroupBalance(getPaymentGroup("summary-group"))'), 250);
+  assert.equal(run(context, 'playerRemainingCredit("b")'), 0);
   assert.equal(run(context, 'state.paymentTransactions.length'), 0);
 });
 
@@ -5543,7 +5675,7 @@ test("payer Credit automatically covers another payment-group member without bei
   assert.match(groupSummaryText, /\*Total charges: 80 AED\*/);
   assert.match(groupSummaryText, /\*Remaining due: 0 AED\*/);
   const groupHistoryHtml = run(context, 'renderGroupPaymentHistoryModal("yogesh-group")');
-  assert.match(groupHistoryHtml, /No recorded group payment transactions yet/);
+  assert.match(groupHistoryHtml, /No recorded payment transactions yet/);
   assert.doesNotMatch(groupHistoryHtml, /Current Allocation|Credit owned|Credit applied/);
   assert.equal(run(context, 'playerBalance("member")'), 0);
   assert.equal(run(context, 'paymentEffectiveStatus(getSession("member-session"), getSession("member-session").payments.member)'), "Paid");
