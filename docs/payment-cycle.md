@@ -1,6 +1,6 @@
 # Payment Lifecycle and Ledger Invariants
 
-**Status:** Owner-approved rule set through technical build 1.0.19; deployment evidence is maintained with the release record.
+**Status:** Owner-approved rule set through technical build 1.0.22; deployment evidence is maintained with the release record. The any-member contribution rule supersedes the earlier configured-payer-only Credit restriction.
 
 **Formal release:** Version 1.0
 
@@ -37,7 +37,7 @@ flowchart LR
 - **Advance:** Intentional prepayment, plus eligible contributions during an active shared-Advance cycle. Each source retains its contributor and original record.
 - **Group Advance:** Advance from any member of an active saved group, available to cover that group's charges. Sharing usage does not transfer ownership of the unused amount.
 - **Credit:** Excess cash from a completed payment or an organizer-relative activity over-contribution. It belongs only to the player who created it.
-- **Group Credit:** A payer's remaining Credit allocated to active members of a saved payment group.
+- **Group Credit:** Any member's remaining Credit allocated to charges within that member's active saved payment group. Unused Credit remains owned by its contributor.
 - **Allocation:** Funding applied to a specific charge.
 - **Outstanding:** Charge minus cash, own Advance, Group Advance, own Credit, and Group Credit.
 
@@ -47,12 +47,12 @@ The ledger applies funding in this order:
 
 1. Recorded cash already allocated to the charge.
 2. Available Advance and Credit sources in date, timestamp and recorded-order sequence, applied to eligible outstanding charges in canonical ledger order.
-3. Advance from any group member may cover group charges. Ordinary Credit covers its owner and, for the group's configured payer, eligible group members.
+3. Advance and ordinary Credit from any group member may cover group charges. The configured default payer does not restrict funding eligibility.
 4. New cash entered for an individual or group payment covers the remaining canonical balance.
 
 Group rules:
 
-- Advance can be used for all active saved-group members regardless of which member deposited it. Ordinary Credit retains the configured-payer sharing restriction.
+- Advance and Credit can be used for saved-group members regardless of which member supplied the funds. Existing personal receipts participate through their derived funding sources; their amount, payer, date and original allocations are not rewritten.
 - A payer's Advance and Credit are each reserved once across all groups; neither can be shown as covering multiple balances simultaneously.
 - Groups are processed in persisted creation order. Shared source objects and cent-safe arithmetic prevent spending a source more than once.
 - Existing overlapping memberships are resolved once in persisted group order. New active overlaps must be rejected because payment responsibility would be ambiguous.
@@ -76,7 +76,7 @@ Group rules:
 - Earlier unused Credit or Advance is carried forward, attributed to its owner, and counted once alongside this period's payments. Personal statements include only funds applied to that player and unused funds they own, not another member's unused balance.
 - Canonical source allocations and current recorded settlements determine the display. Same-day events are grouped at stored-date granularity; undated legacy settlements use the neutral Recorded settlement label. There is no new stored reporting ledger.
 - Activity contributions and already-covered own shares appear once on opposite sides of the statement. Reversal may reopen the earlier report period. Summary generation remains read-only.
-- Conservation: Total Used minus Total Contributions equals Amount Due minus Credit Remaining minus Remaining Advance. Separate personal Credit is not silently netted against another member's due; both values remain visible when necessary.
+- Conservation: Total Used minus Total Contributions equals Amount Due minus Credit Remaining minus Remaining Advance. Eligible member Credit is applied to group dues through explicit source allocations, not merely subtracted in the reminder. Funds from unrelated players do not cover the group.
 - A positive Amount Due includes the Aani/DM payment instructions. Clear or surplus-only statements do not ask for payment. All payment and Advance summaries/reminders end with: "This is an automated message generated via AD Smashers Manager app."
 - The full Summary, Latest Advances, Complete Advance Summary and transaction-only history keep their existing purposes and scopes.
 
@@ -158,6 +158,7 @@ Dashboard values must come from the same ledger snapshot as operational pages.
 ## History and Mutation Rules
 
 - A payment event must retain payer, amount, date/time, funding type, covered players, charge allocations, and resulting Credit.
+- Group history includes receipts explicitly assigned to the group and ungrouped individual/Advance receipts owned by its members, including reversed records. Original receipt details remain historical facts, not current unused balances. Group cards label the configured payer as Default payer; individual-payment confirmations acknowledge the recorded receipt without implying derived Credit remains unspent.
 - Reversal must preserve an audit record and reverse the exact original allocations.
 - The transaction trash dialog must offer two explicit outcomes for an active user receipt: Reverse undoes the exact allocations and retains a reversed audit row; Delete performs the same reversal and then removes that row.
 - An already-reversed user receipt offers Delete only. Deleting it must not recalculate any balance or allocation. Migrated and adjustment audit records cannot be reversed or purged.

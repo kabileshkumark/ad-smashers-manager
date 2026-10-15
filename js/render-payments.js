@@ -299,7 +299,7 @@ function renderPaymentGroupCard(group) {
             <span class="badge ${balanceClass}">${balanceLabel}</span>
           </div>
           <div class="payment-group-details">
-            <p class="row-subtitle">Paid by ${escapeHtml(payerName)} - ${memberCount} members</p>
+            <p class="row-subtitle">Default payer: ${escapeHtml(payerName)} - ${memberCount} members</p>
             <p class="row-subtitle payment-group-members">${escapeHtml(paymentGroupMemberNames(group))}</p>
           </div>
         </div>
@@ -476,7 +476,7 @@ function renderGroupPaymentHistoryModal(groupId = "") {
           <button class="btn icon-button" type="button" data-action="close-modal" aria-label="Close">X</button>
         </div>
         <div class="payment-history-list">
-          ${transactions.length ? transactions.map((transaction) => renderGroupPaymentHistoryRow(transaction)).join("") : `<div class="empty">No recorded group payment transactions yet.</div>`}
+          ${transactions.length ? transactions.map((transaction) => renderGroupPaymentHistoryRow(transaction)).join("") : `<div class="empty">No recorded payment transactions yet.</div>`}
         </div>
       </div>
     </div>
@@ -488,7 +488,8 @@ function renderGroupPaymentHistoryRow(transaction) {
   const coveredNames = uniqueIds(transaction.playerIds || []).map(getPlayerName).filter(Boolean);
   const coveredLabel = coveredNames.length > 3 ? `${coveredNames.slice(0, 3).join(", ")} + ${coveredNames.length - 3} more` : coveredNames.join(", ");
   const group = getPaymentGroup(transaction.groupId);
-  const title = group?.name || "Group Payment";
+  const isAdvance = transaction.type === "advance-payment";
+  const title = isAdvance ? "Advance Payment" : transaction.type === "player-payment" ? "Player Payment" : group?.name || "Group Payment";
   const creditUsed = paymentTransactionCreditUsed(transaction);
   const creditUsedText = creditUsed > 0 ? `, ${currency(creditUsed)} Credit used` : "";
   const creditAddedText = Number(transaction.advanceAmount || 0) > 0 ? `, ${currency(transaction.advanceAmount)} Credit added` : "";
@@ -497,21 +498,23 @@ function renderGroupPaymentHistoryRow(transaction) {
   const canPurge = paymentTransactionCanBePurged(transaction);
   const paymentBadge = !isActive ? "Reversed" : isMigrated ? "Migrated" : `${currency(transaction.amountPaid)} cash`;
   const paymentBadgeClass = isActive && !isMigrated ? "green" : "gold";
+  const detail = isAdvance ? `Advance received ${currency(transaction.amountPaid)}`
+    : `${currency(Number(transaction.appliedAmount || 0))} applied${creditUsedText}${creditAddedText}`;
   return `
     <article class="row-card payment-transaction-row">
       <div class="row-main">
         <div>
           <h3 class="row-title">${escapeHtml(title)}</h3>
           <p class="row-subtitle">${escapeHtml(formatDate(transaction.date))} - paid by ${escapeHtml(payerName)} for ${escapeHtml(coveredLabel || "players")}</p>
-          <p class="row-subtitle">${currency(Number(transaction.appliedAmount || 0))} applied${escapeHtml(creditUsedText)}${escapeHtml(creditAddedText)}${!isActive ? ", transaction reversed" : isMigrated ? `, ${currency(transaction.migratedCreditAmount)} corrected to canonical Credit` : ""}</p>
+          <p class="row-subtitle">${escapeHtml(detail)}${!isActive ? ", transaction reversed" : isMigrated ? `, ${currency(transaction.migratedCreditAmount)} corrected to canonical Credit` : ""}</p>
         </div>
         <div class="toolbar nowrap">
           <span class="badge ${paymentBadgeClass}">${paymentBadge}</span>
           ${
             isActive && !isMigrated
-              ? `<button class="btn icon-only danger" type="button" data-action="delete-payment-transaction" data-transaction="${escapeAttr(transaction.id)}" aria-label="Delete or reverse group payment" title="Delete or Reverse">${icon("trash")}</button>`
+              ? `<button class="btn icon-only danger" type="button" data-action="delete-payment-transaction" data-transaction="${escapeAttr(transaction.id)}" aria-label="Delete or reverse payment" title="Delete or Reverse">${icon("trash")}</button>`
               : canPurge
-                ? `<button class="btn icon-only danger" type="button" data-action="delete-reversed-payment-transaction" data-transaction="${escapeAttr(transaction.id)}" aria-label="Permanently delete reversed group payment record" title="Delete Reversed Record">${icon("trash")}</button>`
+                ? `<button class="btn icon-only danger" type="button" data-action="delete-reversed-payment-transaction" data-transaction="${escapeAttr(transaction.id)}" aria-label="Permanently delete reversed payment record" title="Delete Reversed Record">${icon("trash")}</button>`
                 : ""
           }
         </div>
