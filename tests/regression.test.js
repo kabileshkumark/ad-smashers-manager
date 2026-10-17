@@ -649,6 +649,134 @@ test("final list message shows default guests as player plus numbers", () => {
   assert.doesNotMatch(message, /Saravanan Guest 2/);
 });
 
+test("normal booking messages stay unchanged when saved schedule lines migrate", () => {
+  const context = createAppContext();
+  const pollTemplate = [
+    "Hi Makkalae 👋🏻, please vote here to join us on 🗓️ {{date}}.",
+    "⏱️{{time}} - {{planned_courts}} courts {{booking_status}}",
+    "⚡{{court_name}}",
+    "📍{{location_link}}"
+  ].join("\n");
+  const finalListTemplate = [
+    "🏸 {{date}} 🏸",
+    "🕗 {{compact_time}} 🕗",
+    "",
+    "⚡{{court_name}}",
+    "📍{{location_link}}",
+    "",
+    "✅ {{list_title}}",
+    "{{court_sections}}",
+    "{{final_list_cancellation_notice}}"
+  ].join("\n");
+  context.__legacyPollTemplate = pollTemplate;
+  context.__legacyFinalListTemplate = finalListTemplate;
+  setAppState(
+    context,
+    baseFixture({
+      settings: { pollTemplate, finalListTemplate },
+      sessions: [
+        baseSession({
+          id: "normal-message-session",
+          bookedCourts: 2,
+          plannedCourts: 2,
+          expectedPlayers: 12,
+          courtBookings: [{ startTime: "19:00", endTime: "21:00", courts: 2 }]
+        })
+      ]
+    })
+  );
+
+  const expectedPoll = run(context, "renderTemplate(__legacyPollTemplate, templateData(state.sessions[0]))");
+  const expectedFinalList = run(context, "renderTemplate(__legacyFinalListTemplate, templateData(state.sessions[0]))");
+
+  assert.equal(run(context, "buildPollMessage(state.sessions[0])"), expectedPoll);
+  assert.equal(run(context, "buildFinalListMessage(state.sessions[0])"), expectedFinalList);
+  assert.equal(run(context, "state.settings.pollTemplate.includes('{{poll_schedule}}')"), true);
+  assert.equal(run(context, "state.settings.finalListTemplate.includes('{{final_list_schedule}}')"), true);
+  assert.equal(run(context, "state.settings.finalListTemplate.includes('{{court_sections}}')"), true);
+  assert.equal(run(context, "templateData(state.sessions[0]).court_schedule"), "");
+});
+
+test("combination bookings show clear time-by-time schedules in Poll and Final List", () => {
+  const context = createAppContext();
+  const pollTemplate = [
+    "Hi Makkalae 👋🏻, please vote here to join us on 🗓️ {{date}}.",
+    "⏱️{{time}} - {{planned_courts}} courts {{booking_status}}",
+    "⚡{{court_name}}",
+    "📍{{location_link}}"
+  ].join("\n");
+  const finalListTemplate = [
+    "🏸 {{date}} 🏸",
+    "🕗 {{compact_time}} 🕗",
+    "",
+    "⚡{{court_name}}",
+    "📍{{location_link}}",
+    "",
+    "✅ {{list_title}}",
+    "{{court_sections}}",
+    "{{final_list_cancellation_notice}}"
+  ].join("\n");
+  setAppState(
+    context,
+    baseFixture({
+      settings: { pollTemplate, finalListTemplate },
+      sessions: [
+        baseSession({
+          id: "combination-message-session",
+          expectedPlayers: 18,
+          courtBookings: [
+            { startTime: "19:00", endTime: "21:00", courts: 2 },
+            { startTime: "19:00", endTime: "20:00", courts: 1 }
+          ]
+        })
+      ]
+    })
+  );
+
+  const expectedSchedule = [
+    "🏟️ Courts booked by time:",
+    "• 7:00 PM to 8:00 PM: 3 courts",
+    "• 8:00 PM to 9:00 PM: 2 courts"
+  ].join("\n");
+  const pollMessage = run(context, "buildPollMessage(state.sessions[0])");
+  const finalListMessage = run(context, "buildFinalListMessage(state.sessions[0])");
+
+  assert.match(pollMessage, /⏱️7:00 to 9:00 PM/);
+  assert.match(finalListMessage, /🕗 7:00 to 9:00 PM 🕗/);
+  assert.equal(pollMessage.includes(expectedSchedule), true);
+  assert.equal(finalListMessage.includes(expectedSchedule), true);
+  assert.equal(run(context, "templateData(state.sessions[0]).court_schedule"), expectedSchedule);
+  assert.doesNotMatch(pollMessage, /3\s*→\s*2/);
+  assert.doesNotMatch(finalListMessage, /3\s*→\s*2/);
+  assert.equal((pollMessage.match(/Courts booked by time:/g) || []).length, 1);
+  assert.equal((finalListMessage.match(/Courts booked by time:/g) || []).length, 1);
+  assert.match(pollMessage, /2 courts\n\n⚡Court One/);
+});
+
+test("combination schedule wording follows booking status and court plurality", () => {
+  const context = createAppContext();
+  setAppState(
+    context,
+    baseFixture({
+      sessions: [
+        baseSession({
+          id: "prebooked-combination-message-session",
+          bookingStatus: "Pre-booked",
+          courtBookings: [
+            { startTime: "18:00", endTime: "19:00", courts: 1 },
+            { startTime: "19:00", endTime: "20:00", courts: 2 }
+          ]
+        })
+      ]
+    })
+  );
+
+  const schedule = run(context, "templateData(state.sessions[0]).court_schedule");
+  assert.match(schedule, /Courts pre-booked by time:/);
+  assert.match(schedule, /6:00 PM to 7:00 PM: 1 court/);
+  assert.match(schedule, /7:00 PM to 8:00 PM: 2 courts/);
+});
+
 test("booking court stays pinned before alphabetical court names", () => {
   const context = createAppContext();
   setAppState(
