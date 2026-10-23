@@ -1,7 +1,7 @@
 {
   "name": "ad-smashers-manager",
-  "version": "1.0.22",
-  "appVersion": "1.0.22",
+  "version": "1.0.23",
+  "appVersion": "1.0.23",
   "private": true,
   "scripts": {
     "test": "node --test tests/*.test.js",

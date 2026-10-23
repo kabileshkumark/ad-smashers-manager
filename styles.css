@@ -2963,7 +2963,19 @@ body.is-scrolling-content .bottom-nav {
   min-width: 0;
 }
 
+.session-capacity-control > .field {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  grid-template-columns: minmax(0, 1fr) var(--modal-control-height);
+}
+
+.session-capacity-control > .field > span {
+  grid-column: 1 / -1;
+}
+
 .session-capacity-control > .btn.icon-only {
+  grid-column: 2;
+  grid-row: 1;
   width: var(--modal-control-height);
   min-width: var(--modal-control-height);
   height: var(--modal-control-height);

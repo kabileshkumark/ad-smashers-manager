@@ -3044,7 +3044,7 @@ test("session date change updates modal type and time defaults", () => {
   assert.deepEqual(result, { type: "Saturday", startTime: "18:00", endTime: "20:00", expectedPlayers: 12, waterCost: "12", perPersonAmount: 22 });
 });
 
-test("manual session capacity stays fixed and reset restores the peak-court suggestion", () => {
+test("manual session capacity stays fixed and reset restores the booking-duration suggestion", () => {
   const context = createAppContext();
   setAppState(context, baseFixture({ courts: [court("court-1", "Court One", "Area", 50)] }));
 
@@ -3538,14 +3538,193 @@ test("series booking changes recalculate automatic fees and capacity while keepi
     state.sessions[2].totalPaid = 80;
     state.sessions[2].expectedPlayers = 5;
     state.sessions[2].perPersonAmount = 19;
-    __data = {...state.sessions[1],courtBookings:[{startTime:"19:00",endTime:"22:00",courts:2,courtNumbers:[2,4]}],bookedCourts:2,plannedCourts:2,endTime:"22:00",expectedPlayers:12,totalPaid:300,perPersonAmount:25};
+    __data = {...state.sessions[1],courtBookings:[{startTime:"19:00",endTime:"21:00",courts:2,courtNumbers:[2,4]}],bookedCourts:2,plannedCourts:2,endTime:"21:00",expectedPlayers:12,totalPaid:200,perPersonAmount:17};
     __plan = buildSessionEditPlan(state.sessions[1], __data, __options);
   `);
   assert.equal(run(context, "__plan.valid"), true);
-  assert.deepEqual(jsonValue(context, "__plan.updated[0] && [__plan.updated[0].bookedCourts,__plan.updated[0].totalPaid,__plan.updated[0].expectedPlayers,__plan.updated[0].perPersonAmount]"), [2, 300, 12, 25]);
+  assert.deepEqual(jsonValue(context, "__plan.updated[0] && [__plan.updated[0].bookedCourts,__plan.updated[0].totalPaid,__plan.updated[0].expectedPlayers,__plan.updated[0].perPersonAmount]"), [2, 200, 12, 17]);
   assert.deepEqual(jsonValue(context, "[__plan.updated[1].bookedCourts,__plan.updated[1].totalPaid,__plan.updated[1].expectedPlayers,__plan.updated[1].perPersonAmount]"), [2, 80, 5, 19]);
   run(context, '__plan = buildSessionEditPlan(state.sessions[1], __data, {...__options,capacityExplicit:true,feeExplicit:true,rateExplicit:true})');
-  assert.deepEqual(jsonValue(context, "[__plan.updated[1].totalPaid,__plan.updated[1].expectedPlayers,__plan.updated[1].perPersonAmount]"), [300, 12, 25]);
+  assert.deepEqual(jsonValue(context, "[__plan.updated[1].totalPaid,__plan.updated[1].expectedPlayers,__plan.updated[1].perPersonAmount]"), [200, 12, 17]);
+});
+
+test("booking capacity counts one-hour and two-hour rows without using peak courts", () => {
+  const context = createAppContext();
+  for (const extra of [
+    { startTime: "19:00", endTime: "20:00", courts: 1, courtNumbers: [6] },
+    { startTime: "20:00", endTime: "21:00", courts: 1, courtNumbers: [6] }
+  ]) {
+    context.__bookings = [{ startTime: "19:00", endTime: "21:00", courts: 2, courtNumbers: [2, 4] }, extra];
+    const before = JSON.stringify(context.__bookings);
+    assert.equal(run(context, "suggestedBookingCapacity(__bookings, 6)"), 15);
+    assert.equal(run(context, "courtSlotMaxCourts(__bookings)"), 3);
+    assert.equal(run(context, "courtSlotCourtHours(__bookings)"), 5);
+    assert.equal(JSON.stringify(context.__bookings), before);
+  }
+  assert.equal(run(context, 'suggestedBookingCapacity([{startTime:"23:00",endTime:"01:00",courts:2},{startTime:"00:00",endTime:"01:00",courts:1}],6)'), 15);
+  assert.equal(run(context, 'suggestedBookingCapacity([{startTime:"19:00",endTime:"20:00",courts:1},{startTime:"20:00",endTime:"21:00",courts:1}],6)'), 6);
+  assert.equal(run(context, 'suggestedBookingCapacity([{startTime:"19:00",endTime:"20:00",courts:4}],6)'), 12);
+  assert.equal(run(context, 'suggestedBookingCapacity([{startTime:"19:00",endTime:"21:00",courts:3}],6)'), 18);
+});
+
+test("unsupported durations and fractional places require a manual capacity", () => {
+  const context = createAppContext();
+  for (const endTime of ["19:30", "20:30", "22:00", "19:00"]) {
+    context.__booking = [{ startTime: "19:00", endTime, courts: 1 }];
+    assert.equal(run(context, "suggestedBookingCapacity(__booking,6)"), null, endTime);
+  }
+  assert.equal(run(context, 'suggestedBookingCapacity([{startTime:"19:00",endTime:"20:00",courts:1}],5)'), null);
+  assert.equal(run(context, 'suggestedBookingCapacity([{startTime:"19:00",endTime:"21:00",courts:2}],5)'), 10);
+  for (const courts of [-1, 0, 1.5]) {
+    context.__booking = [{ startTime: "19:00", endTime: "21:00", courts }];
+    assert.equal(run(context, "suggestedBookingCapacity(__booking,6)"), null);
+  }
+});
+
+test("capacity modes preserve manual choices equal to the suggestion through reload", () => {
+  const context = createAppContext();
+  setAppState(context, baseFixture({ sessions: [baseSession({ capacityMode: "manual", expectedPlayers: 6 })] }));
+  assert.equal(run(context, "sessionCapacityIsManual(state.sessions[0])"), true);
+  assert.match(run(context, 'renderSessionModal("session-1")'), /name="expectedPlayers"[^>]*value="6"[^>]*data-manual="true"/);
+  const reloaded = jsonValue(context, "normalizeSession(jsonFromFirestoreValue(firestoreValueFromJson(state.sessions[0])))");
+  assert.equal(reloaded.capacityMode, "manual");
+  assert.equal(reloaded.expectedPlayers, 6);
+  run(context, 'state.sessions[0].capacityMode = "auto"');
+  assert.equal(run(context, "sessionCapacityIsManual(state.sessions[0])"), false);
+});
+
+test("opening legacy mixed bookings preserves saved capacity and financial values", () => {
+  const context = createAppContext();
+  setAppState(context, baseFixture({ sessions: [baseSession({
+    courtBookings: [{ startTime: "19:00", endTime: "21:00", courts: 2 }, { startTime: "20:00", endTime: "21:00", courts: 1 }],
+    expectedPlayers: 18, totalPaid: 250, perPersonAmount: 19
+  })] }));
+  const before = jsonValue(context, "state");
+  assert.match(run(context, 'renderSessionModal("session-1")'), /name="expectedPlayers"[^>]*value="18"[^>]*data-manual="true"/);
+  assert.equal(run(context, "suggestedBookingCapacity(sessionCourtBookings(state.sessions[0]),6)"), 15);
+  assert.equal(run(context, "allocateSession(state.sessions[0]).capacity"), 18);
+  assert.equal(run(context, "normalizeSession(state.sessions[0]).perPersonAmount"), 19);
+  assert.deepEqual(jsonValue(context, "state"), before);
+});
+
+function bookingCapacityFormContext() {
+  const context = createAppContext();
+  setAppState(context, baseFixture());
+  run(context, `
+    __bookings = [{startTime:"19:00",endTime:"21:00",courts:2},{startTime:"20:00",endTime:"21:00",courts:1}];
+    __reset = {disabled:true};
+    __capacity = {value:"",dataset:{},setCustomValidity(value){this.error=value;}};
+    __form = {dataset:{},elements:{expectedPlayers:__capacity,courtId:{value:"court-1"},shuttleCost:{value:"0"},totalPaid:{value:250,dataset:{manual:"true"}},perPersonAmount:{value:"",dataset:{}}},
+      querySelectorAll(){return __bookings.map(booking=>({querySelector(selector){return {value:selector.includes('slotStartTime')?booking.startTime:selector.includes('slotEndTime')?booking.endTime:selector.includes('slotCourts')?booking.courts:""};}}));},
+      querySelector(selector){if(selector==='[data-action="reset-session-capacity"]')return __reset;if(selector==='[data-court-fee-input]')return this.elements.totalPaid;return null;}
+    };
+  `);
+  return context;
+}
+
+test("form calculations update duration capacity but retain manual values and saved settings", () => {
+  const context = bookingCapacityFormContext();
+  run(context, "updateSessionModalCalculations(__form)");
+  assert.equal(run(context, "__capacity.value"), 15);
+  assert.equal(run(context, "__form.elements.perPersonAmount.value"), 17);
+  run(context, '__capacity.dataset.manual="true";__capacity.value=16;__bookings[1].startTime="19:00";updateSessionModalCalculations(__form)');
+  assert.equal(run(context, "__capacity.value"), 16);
+  assert.equal(run(context, "__reset.disabled"), false);
+  run(context, 'delete __capacity.dataset.manual;updateSessionModalCalculations(__form)');
+  assert.equal(run(context, "__capacity.value"), 18);
+  run(context, 'state.sessions=[{id:"saved",playersPerCourt:8}];__form.dataset.editId="saved";state.settings.defaultPlayersPerCourt=6;updateSessionModalCalculations(__form)');
+  assert.equal(run(context, "__capacity.value"), 24, "editing uses the session setting, not a changed global default");
+});
+
+test("unsupported form durations clear automatic capacity and accept an explicit manual value", () => {
+  const context = bookingCapacityFormContext();
+  run(context, '__bookings[1].startTime="19:30";updateSessionModalCalculations(__form)');
+  assert.equal(run(context, "__capacity.value"), "");
+  assert.match(run(context, "__capacity.error"), /manually/);
+  assert.equal(run(context, "__reset.disabled"), true);
+  run(context, '__capacity.dataset.manual="true";__capacity.value=16;updateSessionModalCalculations(__form)');
+  assert.equal(run(context, "__capacity.value"), 16);
+  assert.equal(run(context, "__capacity.error"), "");
+  assert.equal(run(context, "__reset.disabled"), true);
+});
+
+test("series changes apply duration capacity while retaining manual capacity even at the old automatic value", () => {
+  const context = recurrenceEditContext();
+  run(context, `
+    state.sessions[2].capacityMode="manual";
+    __data.courtBookings=[{startTime:"19:00",endTime:"21:00",courts:2,courtNumbers:[2,4]},{startTime:"20:00",endTime:"21:00",courts:1,courtNumbers:[6]}];
+    __data.capacityMode="auto";__data.expectedPlayers=15;
+    __plan=buildSessionEditPlan(state.sessions[1],__data,__options);
+  `);
+  assert.equal(run(context, "__plan.valid"), true);
+  assert.deepEqual(jsonValue(context, "__plan.updated.map(s=>s.expectedPlayers)"), [15, 6, 15]);
+  assert.deepEqual(jsonValue(context, "__plan.updated.map(s=>s.capacityMode)"), ["auto", "manual", "auto"]);
+  const before = jsonValue(context, "state");
+  run(context, '__plan=buildSessionEditPlan(state.sessions[1],__data,{...__options,capacityExplicit:true})');
+  assert.deepEqual(jsonValue(context, "__plan.updated.map(s=>s.expectedPlayers)"), [15, 15, 15]);
+  assert.deepEqual(jsonValue(context, "state"), before);
+});
+
+test("unsupported series durations require manual capacity atomically", () => {
+  const context = recurrenceEditContext();
+  run(context, '__data.courtBookings=[{startTime:"19:00",endTime:"22:00",courts:2}];__plan=buildSessionEditPlan(state.sessions[1],__data,__options)');
+  assert.equal(run(context, "__plan.valid"), false);
+  assert.match(run(context, "__plan.message"), /Capacity manually/);
+  assert.equal(run(context, "JSON.stringify(state)===__original"), true);
+  run(context, '__data.expectedPlayers=12;__data.capacityMode="manual";__plan=buildSessionEditPlan(state.sessions[1],__data,{...__options,capacityExplicit:true})');
+  assert.equal(run(context, "__plan.valid"), true);
+  assert.deepEqual(jsonValue(context, "__plan.updated.map(s=>s.expectedPlayers)"), [12, 12, 12]);
+});
+
+test("published list retains joining order and numbers every vacancy up to saved capacity", () => {
+  const context = createAppContext();
+  const players = Array.from({length:16},(_,i)=>player(`p${i+1}`,`Player ${String(i+1).padStart(2,"0")}`, i % 2 ? "Professional" : "Beginner"));
+  setAppState(context, baseFixture({ players, sessions:[baseSession({
+    date:isoDateFromToday(7),stage:"Draft",expectedPlayers:15,capacityMode:"auto",
+    courtBookings:[{startTime:"19:00",endTime:"21:00",courts:2,courtNumbers:[2,4]},{startTime:"20:00",endTime:"21:00",courts:1,courtNumbers:[6]}],
+    responses:players.slice(0,10).map((p,i)=>({id:`r${i}`,playerId:p.id,voteOrder:i+1,attendanceChoice:"in"}))
+  })] }));
+  const before = jsonValue(context, "state");
+  const sections = run(context, "templateData(state.sessions[0]).player_list_sections");
+  const numbered = sections.split("\n").filter(line=>/^\d+\./.test(line));
+  assert.equal(numbered.length,15);
+  assert.equal(numbered.filter(line=>/^\d+\.$/.test(line)).length,5);
+  assert.deepEqual(numbered.filter(line=>/Player/.test(line)).map(line=>line.replace(/^\d+\. /,"")),players.slice(0,10).map(p=>p.name));
+  assert.match(sections,/Court 6 \(8:00 to 9:00 PM\)\n1\.\n2\.\n3\.$/);
+  assert.equal(run(context, "templateData(state.sessions[0]).list_title"),"Draft List");
+  assert.deepEqual(jsonValue(context,"state"),before);
+  run(context,'state.sessions[0].responses=[]');
+  assert.equal(run(context,"templateData(state.sessions[0]).player_list_sections").split("\n").filter(line=>/^\d+\.$/.test(line)).length,15);
+  run(context,'state.sessions[0].expectedPlayers=0');
+  assert.equal(run(context,"templateData(state.sessions[0]).player_list_sections").split("\n").filter(line=>/^\d+\./.test(line)).length,0);
+});
+
+test("attendance changes preserve waiting-list responses and published joining order", () => {
+  const context = createAppContext();
+  const players = Array.from({length:17},(_,i)=>player(`p${i+1}`,`Player ${String(i+1).padStart(2,"0")}`));
+  setAppState(context,baseFixture({players,sessions:[baseSession({expectedPlayers:15,bookedCourts:3,plannedCourts:3,
+    responses:players.map((p,i)=>({id:`r${i}`,playerId:p.id,voteOrder:i+1,attendanceChoice:"in"}))
+  })]}));
+  const responses = jsonValue(context,"state.sessions[0].responses");
+  const copy = run(context,"buildFinalListMessage(state.sessions[0])");
+  assert.equal(run(context,'removeAttendedPlayer(state.sessions[0],"p1")'),true);
+  assert.deepEqual(jsonValue(context,"allocateSession(state.sessions[0]).waiting.map(p=>p.playerId)"),["p16","p17"]);
+  assert.deepEqual(jsonValue(context,"state.sessions[0].responses"),responses);
+  assert.equal(run(context,"buildFinalListMessage(state.sessions[0])"),copy);
+  assert.equal(run(context,'effectiveAttendedPlayerIds(state.sessions[0]).includes("p16")'),false);
+  assert.equal(run(context,'Object.hasOwn(state.sessions[0].payments,"p16")'),false);
+});
+
+test("published vacancies honor a manual capacity beyond peak court slots", () => {
+  const context = createAppContext();
+  const players = Array.from({length:12},(_,i)=>player(`p${i}`,`Player ${i}`));
+  setAppState(context,baseFixture({players,sessions:[baseSession({date:isoDateFromToday(7),stage:"Draft",bookedCourts:2,plannedCourts:2,expectedPlayers:14,capacityMode:"manual",
+    responses:players.map((p,i)=>({id:`r${i}`,playerId:p.id,voteOrder:i+1,attendanceChoice:"in"}))
+  })]}));
+  assert.equal(run(context,"templateData(state.sessions[0]).list_title"),"Draft List");
+  const lines=run(context,"templateData(state.sessions[0]).player_list_sections").split("\n").filter(line=>/^\d+\./.test(line));
+  assert.equal(lines.length,14);
+  assert.deepEqual(lines.slice(-2),["1.","2."]);
 });
 
 test("in-progress and completed occurrences cannot be moved or removed by Full series", () => {

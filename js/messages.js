@@ -163,28 +163,20 @@ function listSkillSections(allocation) {
 }
 
 function listCourtSectionsByVoteOrder(allocation, playersPerCourt) {
-  const confirmed = confirmedVotingEntries(allocation);
-  const courtSize = Math.max(1, Number(playersPerCourt || PLAYERS_PER_COURT));
-  const sections = [];
-  for (let index = 0; index < confirmed.length; index += courtSize) {
-    sections.push(confirmed.slice(index, index + courtSize));
-  }
-  return sections
-    .map((entries, index) => [`🏸 ${messageCourtGroupHeading(allocation, index)}`, entries.map((entry, entryIndex) => `${entryIndex + 1}. ${entry.name}`).join("\n")].join("\n"))
-    .join("\n\n");
+  return listMessageCourtSectionsByVoteOrder(allocation, playersPerCourt, (entry) => entry.name);
 }
 
-function listMessageCourtSectionsByVoteOrder(allocation, playersPerCourt) {
+function listMessageCourtSectionsByVoteOrder(allocation, playersPerCourt, entryName = messageEntryName) {
   const confirmed = confirmedVotingEntries(allocation);
   const courtSize = Math.max(1, Number(playersPerCourt || PLAYERS_PER_COURT));
   const sections = [];
-  for (let index = 0; index < confirmed.length; index += courtSize) {
-    sections.push(confirmed.slice(index, index + courtSize));
+  for (let index = 0; index < allocation.capacity; index += courtSize) {
+    sections.push(Array.from({ length: Math.min(courtSize, allocation.capacity - index) }, (_, offset) => confirmed[index + offset]));
   }
   return sections
     .map((entries, index) => [
       `${String.fromCodePoint(0x1f3f8)} ${messageCourtGroupHeading(allocation, index)}`,
-      entries.map((entry, entryIndex) => `${entryIndex + 1}. ${messageEntryName(entry)}`).join("\n")
+      entries.map((entry, entryIndex) => entry ? `${entryIndex + 1}. ${entryName(entry)}` : `${entryIndex + 1}.`).join("\n")
     ].join("\n"))
     .join("\n\n");
 }
@@ -208,7 +200,7 @@ function templateData(session) {
   const court = getCourt(session.courtId);
   const allocation = sessionCourtAllocationDisplay(session);
   const playersPerCourt = getPlayersPerCourt(session);
-  const listTitle = finalListTitle(session, allocation, playersPerCourt);
+  const listTitle = finalListTitle(session, allocation);
   const playerListSections = listMessageCourtSectionsByVoteOrder(allocation, playersPerCourt);
   const slots = sessionCourtSlots(session);
   const courtBookings = slots.some((slot) => slot.courtNumbers?.length)
@@ -354,11 +346,10 @@ function defaultFinalListTemplate() {
   ].join("\n");
 }
 
-function finalListTitle(session, allocation = allocateSession(session), playersPerCourt = getPlayersPerCourt(session)) {
+function finalListTitle(session, allocation = allocateSession(session)) {
   const publishedStages = ["Player List Published", "Payment Collection", "Completed"];
-  const courtsAreFull = allocation.courts.length > 0 && allocation.courts.every((court) => court.players.length >= playersPerCourt);
   const expectedPlayersAreFull = allocation.capacity > 0 && allocation.confirmedCount >= allocation.capacity;
-  return publishedStages.includes(session.stage) || expectedPlayersAreFull || courtsAreFull ? "Final List" : "Draft List";
+  return publishedStages.includes(session.stage) || expectedPlayersAreFull ? "Final List" : "Draft List";
 }
 
 function buildPaymentReminder(session) {
