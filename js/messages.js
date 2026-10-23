@@ -141,7 +141,7 @@ function buildFinalListMessage(session) {
 function messageCourtGroupHeading(allocation, index) {
   const court = allocation.courts[index];
   if (!court) return `${allocation.hasBookedCourtNumbers ? "Player Group" : "Court"} ${index + 1}`;
-  return `${court.label || `Court ${court.number}`}${court.availability ? ` (${court.availability})` : ""}`;
+  return court.label || `Court ${court.number}`;
 }
 
 function confirmedVotingEntries(allocation) {

@@ -2725,6 +2725,39 @@ test("court numbers reject bad values, duplicates, missing rows and overlapping 
   assert.equal(run(context, "validateCourtSlots(__bookings).valid"), true, "legacy unnumbered bookings remain supported");
 });
 
+test("published court headings omit time suffixes while booking and court details retain times", () => {
+  for (const startTime of ["19:00", "20:00"]) {
+    const context = createAppContext();
+    const endTime = startTime === "19:00" ? "20:00" : "21:00";
+    setAppState(context, baseFixture({ sessions: [baseSession({
+      expectedPlayers: 15,
+      courtBookings: [
+        { startTime: "19:00", endTime: "21:00", courts: 2, courtNumbers: [2, 4] },
+        { startTime, endTime, courts: 1, courtNumbers: [6] }
+      ]
+    })] }));
+    const before = jsonValue(context, "state");
+    const availability = run(context, "sessionCourtAllocationDisplay(state.sessions[0]).courts[2].availability");
+    assert.ok(availability);
+    assert.ok(run(context, "renderCourtAllocationTab(state.sessions[0])").includes(availability));
+    assert.ok(run(context, "templateData(state.sessions[0]).court_bookings").includes(availability));
+    const plainSections = run(context, "listCourtSectionsByVoteOrder(sessionCourtAllocationDisplay(state.sessions[0]), 6)");
+    assert.match(plainSections, /Court 6\n1\.\n2\.\n3\.$/);
+    for (const template of ["", "{{player_list_sections}}", "{{court_sections}}\n{{court_bookings}} "]) {
+      context.__template = template;
+      run(context, "state.settings.finalListTemplate = __template");
+      const message = run(context, "buildFinalListMessage(state.sessions[0])");
+      assert.match(message, /Court 6\n1\.\n2\.\n3\./);
+      assert.doesNotMatch(message, /Court \d+ \(/);
+      assert.ok(message.includes(availability), "separate booking-time breakdown is preserved");
+      assert.equal(message.split("\n").filter(line => /^\d+\.$/.test(line)).length, 15);
+    }
+    context.__template = before.settings.finalListTemplate;
+    run(context, "state.settings.finalListTemplate = __template");
+    assert.deepEqual(jsonValue(context, "state"), before);
+  }
+});
+
 test("court identities retain equal-count changes and permit adjacent overnight reuse", () => {
   const context = createAppContext();
   context.__bookings = [
@@ -3690,7 +3723,7 @@ test("published list retains joining order and numbers every vacancy up to saved
   assert.equal(numbered.length,15);
   assert.equal(numbered.filter(line=>/^\d+\.$/.test(line)).length,5);
   assert.deepEqual(numbered.filter(line=>/Player/.test(line)).map(line=>line.replace(/^\d+\. /,"")),players.slice(0,10).map(p=>p.name));
-  assert.match(sections,/Court 6 \(8:00 to 9:00 PM\)\n1\.\n2\.\n3\.$/);
+  assert.match(sections,/Court 6\n1\.\n2\.\n3\.$/);
   assert.equal(run(context, "templateData(state.sessions[0]).list_title"),"Draft List");
   assert.deepEqual(jsonValue(context,"state"),before);
   run(context,'state.sessions[0].responses=[]');
