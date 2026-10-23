@@ -38,6 +38,7 @@ function setSessionField(sessionId, fieldName, value) {
     updateSessionPerPersonAmount(session, value);
   } else {
     session[fieldName] = numeric.includes(fieldName) ? Number(value) : value;
+    if (fieldName === "expectedPlayers") session.capacityMode = "manual";
   }
   if (fieldName === "courtId") {
     applyBookingStage(session, true);
@@ -55,12 +56,16 @@ function updateSessionModalCalculations(form) {
   if (!fields) return;
   const courtSlots = sessionCourtSlotsFromForm(form);
   const courts = courtSlotMaxCourts(courtSlots);
-  const playersPerCourt = state.settings.defaultPlayersPerCourt || PLAYERS_PER_COURT;
+  const existing = form.dataset?.editId ? getSession(form.dataset.editId) : null;
+  const playersPerCourt = existing?.playersPerCourt || state.settings.defaultPlayersPerCourt || PLAYERS_PER_COURT;
+  const suggestedCapacity = suggestedBookingCapacity(courtSlots, playersPerCourt);
   const shuttleCost = Number(fields.shuttleCost?.value ?? state.settings.defaultShuttleCost ?? 5);
   const expectedPlayersInput = fields.expectedPlayers;
   if (expectedPlayersInput && expectedPlayersInput.dataset.manual !== "true") {
-    expectedPlayersInput.value = calculateExpectedPlayers(courts, playersPerCourt);
+    expectedPlayersInput.value = suggestedCapacity ?? "";
   }
+  expectedPlayersInput?.setCustomValidity?.(suggestedCapacity === null && expectedPlayersInput.dataset.manual !== "true"
+    ? "Enter Capacity manually for these booking durations or players-per-court setting." : "");
   const courtFeeInput = form?.querySelector("[data-court-fee-input]");
   if (courtFeeInput && courtFeeInput.dataset.manual !== "true") {
     courtFeeInput.value = calculateCourtFeeForSlots(fields.courtId?.value, courtSlots);
@@ -74,7 +79,7 @@ function updateSessionModalCalculations(form) {
     summary.textContent = `${Number(courtSlotCourtHours(courtSlots).toFixed(2))} court-hours; ${courts} peak ${courts === 1 ? "court" : "courts"}`;
   }
   const resetCapacityButton = form?.querySelector('[data-action="reset-session-capacity"]');
-  if (resetCapacityButton) resetCapacityButton.disabled = expectedPlayersInput?.dataset.manual !== "true";
+  if (resetCapacityButton) resetCapacityButton.disabled = suggestedCapacity === null || expectedPlayersInput?.dataset.manual !== "true";
 }
 
 function sessionCourtSlotsFromForm(form) {
@@ -1339,7 +1344,17 @@ async function handleSubmit(event) {
     const courts = courtSlotMaxCourts(courtSlots);
     const bookedCourts = courts;
     const playersPerCourt = Number(existingSession?.playersPerCourt || state.settings.defaultPlayersPerCourt || PLAYERS_PER_COURT);
-    const expectedPlayers = expectedPlayersValue(data.expectedPlayers, bookedCourts, playersPerCourt);
+    const capacityMode = form.elements.expectedPlayers?.dataset.manual === "true" ? "manual" : "auto";
+    const suggestedCapacity = suggestedBookingCapacity(courtBookings, playersPerCourt);
+    if (capacityMode === "auto" && suggestedCapacity === null) {
+      showToast("Enter Capacity manually for bookings other than 1 or 2 hours, or when the suggested places are not whole numbers.");
+      return;
+    }
+    const expectedPlayers = capacityMode === "auto" ? suggestedCapacity : Number(data.expectedPlayers);
+    if (data.expectedPlayers === "" || !Number.isSafeInteger(expectedPlayers) || expectedPlayers < 0) {
+      showToast("Capacity must be a whole number of zero or more.");
+      return;
+    }
     const totalPaid = existingSession
       ? Number(data.totalPaid || 0)
       : data.totalPaid === ""
@@ -1369,6 +1384,7 @@ async function handleSubmit(event) {
       bookedCourts,
       playersPerCourt,
       expectedPlayers,
+      capacityMode,
       totalPaid,
       shuttleCost,
       waterCost,

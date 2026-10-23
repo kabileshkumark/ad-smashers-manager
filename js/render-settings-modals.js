@@ -85,7 +85,7 @@ function renderSessionDefaultsSettings() {
         <div class="form-grid two">
           ${settingsFormSelect("defaultSessionWeekday", "Default Day", weekdayOptions.map(([value, label]) => ({ value: String(value), label })), String(settings.defaultSessionWeekday))}
           ${settingsFormSelect("defaultCourtId", "Default Court", courtOptions, settings.defaultCourtId)}
-          ${settingsFormField("defaultPlayersPerCourt", "Players per Court", "number", settings.defaultPlayersPerCourt, 'min="1" max="24" step="1" required')}
+          ${settingsFormField("defaultPlayersPerCourt", "Players per 2-hour Court", "number", settings.defaultPlayersPerCourt, 'min="1" max="24" step="1" required')}
           ${settingsFormField("defaultShuttleCost", "Shuttle Fee", "number", settings.defaultShuttleCost, 'min="0" step="0.01" required')}
           ${settingsFormSelect("defaultRecurrence", "Default Repeat", [
             { value: "none", label: "Once" },
@@ -973,10 +973,10 @@ function renderSessionModal(sessionId = "") {
   const courtSlots = validateCourtSlots(courtBookings).slots;
   const courts = courtSlotMaxCourts(courtSlots);
   const playersPerCourt = Number(session?.playersPerCourt || state.settings.defaultPlayersPerCourt || PLAYERS_PER_COURT);
-  const calculatedExpectedPlayers = calculateExpectedPlayers(courts, playersPerCourt);
-  const expectedPlayers = expectedPlayersValue(session?.expectedPlayers, courts, playersPerCourt);
-  const expectedPlayersManual = isEdit && expectedPlayers !== calculatedExpectedPlayers;
-  const expectedPlayersAttrs = `data-expected-players-input data-session-rate-source${expectedPlayersManual ? ' data-manual="true"' : ""}`;
+  const calculatedExpectedPlayers = suggestedBookingCapacity(courtBookings, playersPerCourt);
+  const expectedPlayers = isEdit ? session.expectedPlayers : calculatedExpectedPlayers ?? "";
+  const expectedPlayersManual = isEdit && sessionCapacityIsManual(session);
+  const expectedPlayersAttrs = `required data-expected-players-input data-session-rate-source${expectedPlayersManual ? ' data-manual="true"' : ""}`;
   const calculatedCourtFee = calculateCourtFeeForSlots(courtId, courtSlots);
   const totalPaid = isEdit
     ? Number(session?.totalPaid ?? 0)
@@ -1036,7 +1036,7 @@ function renderSessionModal(sessionId = "") {
           <div class="session-form-row two">
             <div class="session-capacity-control">
               ${numberField("expectedPlayers", "Capacity", expectedPlayers, 0, "modal", expectedPlayersAttrs)}
-              <button class="btn icon-only" type="button" data-action="reset-session-capacity" aria-label="Reset capacity to suggested" title="Reset capacity" ${expectedPlayersManual ? "" : "disabled"}>${icon("refresh")}</button>
+              <button class="btn icon-only" type="button" data-action="reset-session-capacity" aria-label="Reset capacity to suggested" title="Reset capacity" ${expectedPlayersManual && calculatedExpectedPlayers !== null ? "" : "disabled"}>${icon("refresh")}</button>
             </div>
             ${numberField("waterCost", "Water Cost", waterCost, 0, "modal", waterCostAttrs)}
           </div>

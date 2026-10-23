@@ -666,7 +666,7 @@ function sessionSeriesCancellationBlocked(session) {
 function buildSessionEditPlan(session, formData, options = {}, sessions = state.sessions) {
   const fail = (message) => ({ valid: false, message, updated: [], created: [], removed: [] });
   if (!session || !sessions.some((item) => item.id === session.id)) return fail("Session no longer exists. Reopen the session list.");
-  const bookingFields = ["courtId", "startTime", "endTime", "courtBookings", "plannedCourts", "bookedCourts", "playersPerCourt", "expectedPlayers", "totalPaid", "shuttleCost", "waterCost", "perPersonAmount"];
+  const bookingFields = ["courtId", "startTime", "endTime", "courtBookings", "plannedCourts", "bookedCourts", "playersPerCourt", "expectedPlayers", "capacityMode", "totalPaid", "shuttleCost", "waterCost", "perPersonAmount"];
   const sessionData = Object.fromEntries([...bookingFields, "date", "type", "groupId", "stage", "bookingStatus"]
     .filter((key) => Object.hasOwn(formData, key)).map((key) => [key, formData[key]]));
   if (!validIsoSessionDate(sessionData.date)) return fail("Select a valid session date.");
@@ -705,17 +705,18 @@ function buildSessionEditPlan(session, formData, options = {}, sessions = state.
     const dayShift = Math.round((Date.parse(`${sessionData.date}T12:00:00Z`) - Date.parse(`${first.date}T12:00:00Z`)) / 86400000);
     const patch = {};
     bookingFields.filter((key) => Object.hasOwn(sessionData, key)).forEach((key) => {
+      if (["expectedPlayers", "capacityMode"].includes(key) && !options.capacityExplicit) return;
       const before = key === "courtBookings" ? sessionCourtBookings(session) : session[key];
       if (JSON.stringify(before) !== JSON.stringify(sessionData[key])) patch[key] = sessionData[key];
     });
     if (options.capacityExplicit) patch.expectedPlayers = sessionData.expectedPlayers;
     if (options.feeExplicit) patch.totalPaid = sessionData.totalPaid;
     if (options.rateExplicit) patch.perPersonAmount = sessionData.perPersonAmount;
-    upcoming.forEach((original, index) => {
+    for (const [index, original] of upcoming.entries()) {
       const date = addDaysIso(original.date, dayShift);
       if ((plan.frequency === "none" && index > 0) || date > plan.endDate) {
         removed.push(original);
-        return;
+        continue;
       }
       const next = { ...copy(original), ...copy(patch), date };
       const schedule = validateCourtSlots(sessionCourtBookings(next));
@@ -725,10 +726,16 @@ function buildSessionEditPlan(session, formData, options = {}, sessions = state.
         next.bookedCourts = courtSlotMaxCourts(schedule.slots);
         next.plannedCourts = next.bookedCourts;
       }
-      if (!options.capacityExplicit) {
-        next.expectedPlayers = original.expectedPlayers === calculateExpectedPlayers(sessionMaxCourts(original), original.playersPerCourt)
-          ? calculateExpectedPlayers(next.bookedCourts, next.playersPerCourt)
-          : original.expectedPlayers;
+      const automaticCapacity = options.capacityExplicit
+        ? sessionData.capacityMode === "auto"
+        : !sessionCapacityIsManual(original);
+      if (automaticCapacity) {
+        const suggestedCapacity = suggestedBookingCapacity(sessionCourtBookings(next), next.playersPerCourt);
+        if (suggestedCapacity === null) return fail("Set Capacity manually for bookings other than 1 or 2 hours, or when the suggested places are not whole numbers. No sessions changed.");
+        next.expectedPlayers = suggestedCapacity;
+        next.capacityMode = "auto";
+      } else if (!options.capacityExplicit) {
+        next.expectedPlayers = original.expectedPlayers;
       }
       if (!options.feeExplicit) {
         next.totalPaid = original.totalPaid === calculateCourtFeeForSlots(original.courtId, sessionCourtSlots(original))
@@ -747,7 +754,7 @@ function buildSessionEditPlan(session, formData, options = {}, sessions = state.
       }
       delete next.courtSlots;
       updated.push(next);
-    });
+    }
     const blocked = removed.find(sessionSeriesCancellationBlocked);
     if (blocked) return fail(`${formatDate(blocked.date)} has player, publication or payment history. It cannot be cancelled by a series edit. No sessions changed.`);
     // Missing dates inside the previous range are cancelled occurrences, not gaps to refill.
@@ -812,6 +819,33 @@ function calculateExpectedPlayers(bookedCourts, playersPerCourt) {
   const perCourt = Number(playersPerCourt || 0);
   if (!Number.isFinite(courtCount) || !Number.isFinite(perCourt)) return 0;
   return Math.max(0, courtCount) * Math.max(0, perCourt);
+}
+
+function suggestedBookingCapacity(bookings, playersPerCourt = PLAYERS_PER_COURT) {
+  const perCourt = Number(playersPerCourt);
+  if (!Number.isInteger(perCourt) || perCourt <= 0 || !Array.isArray(bookings) || !bookings.length) return null;
+  if (!validateCourtSlots(courtBookingFinancialFields(bookings)).valid) return null;
+  let capacity = 0;
+  // Use original booking rows: peak-count timeline segments are not separate bookings.
+  for (const booking of bookings) {
+    const duration = sessionDurationHours(booking.startTime, booking.endTime);
+    const courts = Number(booking.courts);
+    if (!Number.isSafeInteger(courts) || courts <= 0) return null;
+    if (duration !== 1 && duration !== 2) return null;
+    const placesPerCourt = duration === 1 ? perCourt / 2 : perCourt;
+    if (!Number.isInteger(placesPerCourt)) return null;
+    capacity += courts * placesPerCourt;
+  }
+  return Number.isSafeInteger(capacity) && capacity >= 0 ? capacity : null;
+}
+
+function sessionCapacityIsManual(session) {
+  if (session?.capacityMode === "manual") return true;
+  const suggested = suggestedBookingCapacity(sessionCourtBookings(session), getPlayersPerCourt(session));
+  if (suggested === null) return true;
+  if (session?.capacityMode === "auto") return false;
+  // Legacy saved capacities remain authoritative, even when the new suggestion differs.
+  return Number(session?.expectedPlayers) !== suggested;
 }
 
 function expectedPlayersValue(value, bookedCourts, playersPerCourt) {
