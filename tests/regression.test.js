@@ -127,6 +127,7 @@ function createAppContext(options = {}) {
 
   const context = {
     console,
+    AbortController,
     setTimeout,
     clearTimeout,
     URL,
@@ -7416,6 +7417,70 @@ test("startup and recovery screens hide backend provider details", () => {
   assert.doesNotMatch(settingsHtml, /Firebase|Firestore/i);
 });
 
+test("quota errors retain their classification without disclosing backend details", async () => {
+  const context = createAppContext();
+  context.fetch = async () => jsonResponse(429, { error: { status: "RESOURCE_EXHAUSTED", message: "Quota exceeded." } });
+  for (const expression of [
+    'firebaseRequest("https://example.test")',
+    'fetchFirestoreDocument("adSmashers/main", "test")',
+    'listFirestoreCollection("adSmashers/main", "players", "test")',
+    'commitFirestoreWrites("test", [])'
+  ]) {
+    await assert.rejects(run(context, expression), error => error.serviceQuotaExceeded && error.status === 429);
+  }
+  run(context, 'cloudLoadFailed = true; cloudError = userFacingDataLoadError({ serviceQuotaExceeded: true }); render()');
+  const html = run(context, 'document.querySelector("#app").innerHTML');
+  assert.match(html, /data service has reached its usage limit/);
+  assert.match(html, /Pending changes on this device are retained/);
+  assert.doesNotMatch(html, /Check your connection|RESOURCE_EXHAUSTED|Firebase|Firestore/);
+  assert.match(html, /Retry Data Load/);
+  assert.equal(run(context, 'userFacingSignInError({ serviceQuotaExceeded: true })'), run(context, 'SERVICE_LIMIT_MESSAGE'));
+});
+
+test("successful authentication followed by a quota failure stays on safe data recovery", async () => {
+  const context = createAppContext();
+  context.console = { ...console, error() {} };
+  context.FormData = class { entries() { return [["email", "admin@adsmashers.app"], ["password", "local-test-only"]]; } };
+  run(context, 'currentUser = null; currentUserRole = ""; currentUserMembership = null');
+  let requests = 0;
+  context.fetch = async (url) => {
+    requests += 1;
+    if (url.includes("signInWithPassword")) return jsonResponse(200, { idToken: "test-token", refreshToken: "test-refresh", localId: "test-uid", email: "admin@adsmashers.app" });
+    return jsonResponse(429, { error: { status: "RESOURCE_EXHAUSTED", message: "Quota exceeded." } });
+  };
+  context.__loginEvent = { preventDefault() {}, target: { closest() { return { dataset: { form: "login" } }; } } };
+  await run(context, "handleSubmit(__loginEvent)");
+  assert.equal(requests, 2);
+  assert.equal(run(context, "isAuthenticated()"), true);
+  assert.equal(run(context, "cloudLoadFailed"), true);
+  assert.equal(run(context, "loadFirebaseAuthSession().refreshToken"), "test-refresh");
+  assert.equal(run(context, "loginError"), "");
+  assert.match(run(context, 'document.querySelector("#app").innerHTML'), /Your Data Did Not Load/);
+});
+
+test("invalid passwords still stay on sign-in and never load data", async () => {
+  const context = createAppContext();
+  context.console = { ...console, error() {} };
+  context.FormData = class { entries() { return [["email", "admin@adsmashers.app"], ["password", "invalid"]]; } };
+  run(context, 'currentUser = null; currentUserRole = ""');
+  context.fetch = async () => jsonResponse(400, { error: { message: "INVALID_LOGIN_CREDENTIALS" } });
+  context.__loginEvent = { preventDefault() {}, target: { closest() { return { dataset: { form: "login" } }; } } };
+  await run(context, "handleSubmit(__loginEvent)");
+  assert.equal(run(context, "isAuthenticated()"), false);
+  assert.equal(run(context, "cloudLoadFailed"), false);
+  assert.equal(run(context, "loginError"), "Email or password is incorrect.");
+});
+
+test("quota during token refresh preserves the saved session and pending journal", async () => {
+  const context = createAppContext();
+  context.URLSearchParams = URLSearchParams;
+  run(context, 'currentUser.expiresAt = 0; saveFirebaseAuthSession(currentUser); persistPendingCloudState(state)');
+  context.fetch = async () => jsonResponse(429, { error: { status: "RESOURCE_EXHAUSTED" } });
+  await assert.rejects(run(context, "restoreFirebaseAuthSession()"), error => error.serviceQuotaExceeded);
+  assert.ok(run(context, "loadFirebaseAuthSession().refreshToken"));
+  assert.ok(run(context, "readPendingCloudState()"));
+});
+
 test("unknown sign-in failures use a safe public message", () => {
   const context = createAppContext();
 
@@ -8794,6 +8859,544 @@ test("cloud load falls back to the legacy state document and marks it for migrat
   assert.equal(run(context, "cloudStateExists"), false);
   assert.equal(run(context, "cloudStateVersion"), 3);
   assert.equal(run(context, "cloudStateNeedsMigrationSave"), true);
+});
+
+function installQuotaTestWriter(context, audits = []) {
+  const calls = { auditReads: 0, commits: [] };
+  context.fetch = async (url, request = {}) => {
+    if (url.includes("/auditLogs?")) {
+      calls.auditReads += 1;
+      return jsonResponse(200, structuredAuditLogsList(audits));
+    }
+    assert.ok(url.endsWith("documents:commit"), url);
+    calls.commits.push(JSON.parse(request.body));
+    return jsonResponse(200, { writeResults: [{ updateTime: `2026-10-24T04:00:${String(calls.commits.length).padStart(2, "0")}Z` }] });
+  };
+  return calls;
+}
+
+test("an unchanged workspace save makes no network requests or audit entries", async () => {
+  const context = createAppContext();
+  const fixture = baseFixture({ players: [player("p1", "Unchanged")] });
+  context.fetch = structuredFetchForState(fixture, 8);
+  await run(context, "loadCloudState().then(loaded => { state = loaded; })");
+  run(context, "persistPendingCloudState(state)");
+  const calls = installQuotaTestWriter(context);
+  await run(context, "saveCloudState(state)");
+  assert.equal(calls.auditReads, 0);
+  assert.equal(calls.commits.length, 0);
+  assert.equal(run(context, "cloudStateVersion"), 8);
+  assert.equal(run(context, "readPendingCloudState()"), null);
+});
+
+test("editing one player writes only that player, the versioned root and its audit", async () => {
+  const context = createAppContext();
+  const fixture = baseFixture({ players: [player("p1", "First"), player("p2", "Second")], sessions: [baseSession()] });
+  context.fetch = structuredFetchForState(fixture, 8, "2026-10-24T03:00:00Z");
+  await run(context, "loadCloudState().then(loaded => { state = loaded; })");
+  run(context, 'state.players[0].name = "Edited"; persistPendingCloudState(state)');
+  const calls = installQuotaTestWriter(context);
+  await run(context, "saveCloudState(state)");
+  assert.equal(calls.auditReads, 1);
+  assert.equal(calls.commits[0].writes.length, 3);
+  assert.equal(calls.commits[0].writes[0].currentDocument.updateTime, "2026-10-24T03:00:00Z");
+  assert.ok(calls.commits[0].writes.some(write => write.update?.name.endsWith("/players/p1")));
+  assert.ok(calls.commits[0].writes.some(write => write.update?.name.includes("/auditLogs/")));
+  assert.equal(run(context, "cloudStateVersion"), 9);
+  assert.equal(run(context, "readPendingCloudState()"), null);
+  run(context, 'state.players[1].name = "Second edit"');
+  await run(context, "saveCloudState(state)");
+  assert.equal(calls.auditReads, 1, "reuse audit records between edits");
+  assert.equal(calls.commits[1].writes.length, 3);
+  assert.ok(calls.commits[1].writes.some(write => write.update?.name.endsWith("/players/p2")));
+  assert.ok(!calls.commits[1].writes.some(write => write.update?.name.endsWith("/players/p1")));
+});
+
+test("delta saves retain settings, archive moves, deletions and advance changes", async () => {
+  const context = createAppContext();
+  const fixture = baseFixture({ players: [player("p1", "Archive"), player("p2", "Delete"), player("p3", "Keep")], advances: { p1: 10, p2: 20, p3: 30 } });
+  context.fetch = structuredFetchForState(fixture, 8);
+  await run(context, "loadCloudState().then(loaded => { state = loaded; })");
+  run(context, 'state.players[0].active = false; state.players = state.players.filter(p => p.id !== "p2"); state.settings.clubName = "Edited club"; state.advances.p1 = 15; delete state.advances.p2; state.players.push({ ...state.players[1], id: "p4", name: "New" })');
+  const calls = installQuotaTestWriter(context);
+  await run(context, "saveCloudState(state)");
+  const writes = calls.commits[0].writes;
+  const updated = writes.flatMap(write => write.update ? [write.update.name.split("/adSmashers/main/")[1]] : []);
+  const deleted = writes.flatMap(write => write.delete ? [write.delete.split("/adSmashers/main/")[1]] : []);
+  for (const name of ["settings/current", "archivedPlayers/p1", "players/p4", "advances/p1"]) assert.ok(updated.includes(name), name);
+  for (const name of ["players/p1", "players/p2", "advances/p2"]) assert.ok(deleted.includes(name), name);
+  for (const name of ["players/p3", "advances/p3"]) assert.ok(!updated.includes(name), name);
+});
+
+test("delta save preserves a pending edit made while the first save is in flight", async () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-10-24T04:00:00Z");
+  const fixture = baseFixture({ players: [player("p1", "First"), player("p2", "Second")] });
+  context.fetch = structuredFetchForState(fixture, 8);
+  await run(context, "loadCloudState().then(loaded => { state = loaded; })");
+  let release;
+  let started;
+  const waiting = new Promise(resolve => { started = resolve; });
+  context.fetch = async (url) => {
+    if (url.includes("/auditLogs?")) { started(); return new Promise(resolve => { release = resolve; }); }
+    return jsonResponse(200, { commitTime: "2026-10-24T04:00:01Z" });
+  };
+  run(context, 'state.players[0].name = "First edit"; persistPendingCloudState(state)');
+  const saving = run(context, "saveCloudState(state)");
+  await waiting;
+  run(context, 'state.players[1].name = "Later edit"; persistPendingCloudState(state)');
+  release(jsonResponse(200, structuredAuditLogsList([])));
+  await saving;
+  assert.ok(run(context, "readPendingCloudState()"));
+  assert.equal(run(context, "cloudStateBaseSnapshot.players[1].name"), "Second");
+  const calls = installQuotaTestWriter(context);
+  await run(context, "saveCloudState(state)");
+  assert.equal(calls.commits[0].writes.length, 3);
+  assert.ok(calls.commits[0].writes.some(write => write.update?.name.endsWith("/players/p2")));
+});
+
+test("audit cache refreshes after one hour and never crosses a sign-out boundary", async () => {
+  const context = createAppContext();
+  const calls = installQuotaTestWriter(context);
+  await run(context, 'loadCloudSaveAuditLogs("test", captureCloudSession())');
+  await run(context, 'loadCloudSaveAuditLogs("test", captureCloudSession())');
+  assert.equal(calls.auditReads, 1);
+  run(context, "cloudSaveAuditCache.fetchedAt -= AUDIT_LOG_REFRESH_MS");
+  await run(context, 'loadCloudSaveAuditLogs("test", captureCloudSession())');
+  assert.equal(calls.auditReads, 2);
+  await run(context, "signOutFromFirebase()");
+  assert.equal(run(context, "cloudSaveAuditCache"), null);
+});
+
+test("expired audit pruning is bounded and does not repeat successful deletes", async () => {
+  const context = createAppContext();
+  const fixture = baseFixture({ players: [player("p1", "Player")] });
+  context.fetch = structuredFetchForState(fixture, 8);
+  await run(context, "loadCloudState().then(loaded => { state = loaded; })");
+  const calls = installQuotaTestWriter(context, Array.from({ length: 510 }, (_, i) => ({ id: `expired-${i}`, createdAt: "2020-01-01", expiresAt: "2020-02-01" })));
+  run(context, 'state.players[0].name = "First edit"');
+  await run(context, "saveCloudState(state)");
+  assert.equal(calls.commits[0].writes.length, 500);
+  assert.equal(calls.commits[0].writes.filter(write => write.delete).length, 497);
+  run(context, 'state.players[0].name = "Next edit"');
+  await run(context, "saveCloudState(state)");
+  assert.equal(calls.auditReads, 1);
+  assert.equal(calls.commits[1].writes.filter(write => write.delete).length, 13);
+  assert.equal(run(context, "cloudSaveAuditCache.documents.length"), 0);
+});
+
+test("quota failures pause retries, retain pending edits and recover after a successful load", async () => {
+  for (const failureAt of ["audit", "commit"]) {
+    const context = createAppContext();
+    const fixture = baseFixture({ players: [player("p1", "Before")] });
+    context.fetch = structuredFetchForState(fixture, 8);
+    await run(context, "loadCloudState().then(loaded => { state = loaded; })");
+    run(context, 'state.players[0].name = "Pending edit"; persistPendingCloudState(state)');
+    let requests = 0;
+    context.fetch = async (url) => {
+      requests += 1;
+      if (failureAt === "commit" && url.includes("/auditLogs?")) return jsonResponse(200, structuredAuditLogsList([]));
+      return jsonResponse(429, { error: { status: "RESOURCE_EXHAUSTED", message: "Quota exceeded." } });
+    };
+    await run(context, "flushCloudSave()");
+    assert.equal(run(context, "cloudSaveQuotaExceeded"), true);
+    assert.equal(run(context, "cloudSaveTimer"), null);
+    assert.equal(run(context, "cloudSavePending"), false);
+    assert.equal(run(context, "cloudStateVersion"), 8);
+    assert.ok(run(context, "readPendingCloudState()"));
+    assert.equal(run(context, "cloudLoadFailed"), true);
+    const before = requests;
+    run(context, "saveState()");
+    await run(context, "flushCloudSave()");
+    assert.equal(requests, before, "do not hammer exhausted services");
+    context.fetch = structuredFetchForState(fixture, 8);
+    await run(context, "loadCloudState().then(loaded => { state = loaded; })");
+    assert.equal(run(context, "cloudSaveQuotaExceeded"), false);
+    assert.equal(run(context, "state.players[0].name"), "Pending edit");
+    const calls = installQuotaTestWriter(context);
+    await run(context, "flushCloudSave()");
+    assert.equal(calls.commits[0].writes.length, 3);
+    assert.equal(run(context, "readPendingCloudState()"), null);
+  }
+});
+
+test("quota exhaustion during conflict recovery retains the quota classification", async () => {
+  const context = createAppContext();
+  const fixture = baseFixture({ players: [player("p1", "Before")] });
+  context.fetch = structuredFetchForState(fixture, 8);
+  await run(context, "loadCloudState().then(loaded => { state = loaded; })");
+  run(context, 'state.players[0].name = "Pending"; persistPendingCloudState(state)');
+  context.fetch = async (url) => {
+    if (url.includes("/auditLogs?")) return jsonResponse(200, structuredAuditLogsList([]));
+    if (url.endsWith("documents:commit")) return jsonResponse(409, { error: { status: "ABORTED" } });
+    return jsonResponse(429, { error: { status: "RESOURCE_EXHAUSTED" } });
+  };
+  await run(context, "flushCloudSave()");
+  assert.equal(run(context, "cloudSaveQuotaExceeded"), true);
+  assert.equal(run(context, "cloudSaveTimer"), null);
+  assert.equal(run(context, "cloudSaveConflict"), false);
+  assert.ok(run(context, "readPendingCloudState()"));
+});
+
+function installSyncClock(context) {
+  let now = Date.now();
+  let id = 0;
+  const timers = new Map();
+  context.Date = class extends Date {
+    constructor(...args) { super(...(args.length ? args : [now])); }
+    static now() { return now; }
+  };
+  context.setTimeout = (callback, delay = 0) => {
+    timers.set(++id, { callback, at: now + delay });
+    return id;
+  };
+  context.clearTimeout = timer => timers.delete(timer);
+  return {
+    timers,
+    now: () => now,
+    async advance(ms) {
+      const until = now + ms;
+      for (let count = 0; count < 100; count += 1) {
+        const next = [...timers].filter(([, timer]) => timer.at <= until).sort((a, b) => a[1].at - b[1].at)[0];
+        if (!next) { now = until; return; }
+        timers.delete(next[0]);
+        now = next[1].at;
+        await next[1].callback();
+      }
+      assert.fail("Unexpected unbounded timer loop");
+    }
+  };
+}
+
+async function retryTestContext() {
+  const context = createAppContext();
+  const fixture = baseFixture({ players: [player("p1", "Before")] });
+  context.fetch = structuredFetchForState(fixture, 8);
+  await run(context, "loadCloudState().then(loaded => { state = loaded; })");
+  run(context, 'state.players[0].name = "Pending"; persistPendingCloudState(state); render = () => {}');
+  const clock = installSyncClock(context);
+  return { context, fixture, clock };
+}
+
+test("temporary failures stop after three saves with 5s and 15s backoff despite edits or immediate-save calls", async () => {
+  for (const status of [408, 500, 502, 503, 504, "network"]) {
+    const { context, clock } = await retryTestContext();
+    const attempts = [];
+    context.fetch = async () => {
+      attempts.push(clock.now());
+      if (status === "network") throw new TypeError("Failed to fetch");
+      return jsonResponse(status, { error: { status: "UNAVAILABLE" } });
+    };
+    await run(context, "flushCloudSave()");
+    assert.equal(attempts.length, 1);
+    const scheduled = run(context, "cloudSaveTimer");
+    run(context, 'state.players[0].notes = "Newer edit during backoff"; saveState(); queueCloudSave(0)');
+    await run(context, "flushCloudSave()");
+    await assert.rejects(run(context, "saveStateNow()"));
+    assert.equal(run(context, "cloudSaveTimer"), scheduled);
+    await clock.advance(4999);
+    assert.equal(attempts.length, 1);
+    await clock.advance(1);
+    assert.equal(attempts.length, 2);
+    await clock.advance(14999);
+    assert.equal(attempts.length, 2);
+    await clock.advance(1);
+    assert.equal(attempts.length, 3);
+    assert.deepEqual(attempts.map(time => time - attempts[0]), [0, 5000, 20000]);
+    assert.equal(run(context, "cloudSavePaused"), true);
+    assert.equal(run(context, "cloudSaveAttemptCount"), 3);
+    assert.equal(run(context, "lastCloudSaveError"), run(context, "SAVE_PAUSED_MESSAGE"));
+    run(context, "saveState(); queueCloudSave(0)");
+    await run(context, "flushCloudSave()");
+    await clock.advance(86400000);
+    assert.equal(attempts.length, 3, "no background retries after exhaustion");
+    assert.equal(clock.timers.size, 0);
+    assert.equal(run(context, 'readPendingCloudState().state.players[0].notes'), "Newer edit during backoff");
+  }
+});
+
+test("quota and permanent HTTP errors never retry automatically", async () => {
+  for (const status of [400, 401, 403, 422, 429, 501]) {
+    const { context, clock } = await retryTestContext();
+    let attempts = 0;
+    context.fetch = async () => { attempts += 1; return jsonResponse(status, { error: { message: "Internal service detail" } }); };
+    await run(context, "flushCloudSave()");
+    run(context, "saveState(); queueCloudSave(0)");
+    await run(context, "flushCloudSave()");
+    await clock.advance(60000);
+    assert.equal(attempts, 1, String(status));
+    assert.equal(run(context, "cloudSavePaused"), true);
+    assert.equal(clock.timers.size, 0);
+    assert.ok(run(context, "readPendingCloudState()"));
+  }
+});
+
+test("invalid response JSON and programming errors do not trigger retries", async () => {
+  for (const programmingError of [false, true]) {
+    const { context, clock } = await retryTestContext();
+    if (programmingError) run(context, 'saveCloudState = async () => { throw new TypeError("bad application state"); }');
+    else context.fetch = async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError("bad response"); } });
+    await run(context, "flushCloudSave()");
+    await clock.advance(60000);
+    assert.equal(run(context, "cloudSaveAttemptCount"), 1);
+    assert.equal(run(context, "cloudSavePaused"), true);
+    assert.equal(clock.timers.size, 0);
+  }
+});
+
+test("successful retry resets the budget and saves the latest edit once", async () => {
+  const { context, clock } = await retryTestContext();
+  const calls = installQuotaTestWriter(context);
+  const writer = context.fetch;
+  let attempts = 0;
+  context.fetch = async (...args) => ++attempts === 1 ? jsonResponse(503, {}) : writer(...args);
+  await run(context, "flushCloudSave()");
+  run(context, 'state.players[0].notes = "Latest note"; saveState()');
+  await clock.advance(5000);
+  assert.equal(calls.commits.length, 1);
+  assert.equal(calls.commits[0].writes.find(write => write.update?.name.endsWith("/players/p1")).update.fields.notes.stringValue, "Latest note");
+  assert.equal(run(context, "cloudSaveAttemptCount"), 0);
+  assert.equal(run(context, "cloudSavePaused"), false);
+  assert.equal(run(context, "lastCloudSaveError"), "");
+  assert.equal(run(context, "cloudError"), "");
+  assert.equal(run(context, "readPendingCloudState()"), null);
+  run(context, 'state.players[0].notes = "Next save"; saveState()');
+  await clock.advance(650);
+  assert.equal(calls.commits.length, 2);
+  assert.equal(clock.timers.size, 0);
+});
+
+test("conflict recovery and temporary failures share the same three-attempt budget", async () => {
+  const { context, fixture, clock } = await retryTestContext();
+  const reads = structuredFetchForState(fixture, 9);
+  let commits = 0;
+  context.fetch = async (url, request) => {
+    if (url.endsWith("documents:commit")) {
+      commits += 1;
+      return jsonResponse(commits === 2 ? 409 : 503, { error: { status: commits === 2 ? "ABORTED" : "UNAVAILABLE" } });
+    }
+    return reads(url, request);
+  };
+  await run(context, "flushCloudSave()");
+  assert.equal(commits, 1);
+  await clock.advance(5000);
+  assert.equal(commits, 3, "one transient retry and one conflict retry, not a new budget");
+  assert.equal(run(context, "cloudSaveAttemptCount"), 3);
+  assert.equal(run(context, "cloudSavePaused"), true);
+  await clock.advance(60000);
+  assert.equal(commits, 3);
+  assert.equal(clock.timers.size, 0);
+  assert.ok(run(context, "readPendingCloudState()"));
+});
+
+test("repeated conflicts stop after one recovery instead of reloading indefinitely", async () => {
+  const { context, fixture, clock } = await retryTestContext();
+  const reads = structuredFetchForState(fixture, 9);
+  let commits = 0;
+  context.fetch = async (url, request) => {
+    if (url.endsWith("documents:commit")) { commits += 1; return jsonResponse(409, { error: { status: "ABORTED" } }); }
+    return reads(url, request);
+  };
+  await run(context, "flushCloudSave()");
+  await clock.advance(60000);
+  assert.equal(commits, 2);
+  assert.equal(run(context, "cloudSaveConflict"), true);
+  assert.equal(clock.timers.size, 0);
+  assert.ok(run(context, "readPendingCloudState()"));
+});
+
+test("failed manual recovery keeps saves paused; only a complete reload restores the budget", async () => {
+  const { context, fixture, clock } = await retryTestContext();
+  context.fetch = async () => jsonResponse(503, {});
+  await run(context, "flushCloudSave()");
+  await clock.advance(20000);
+  assert.equal(run(context, "cloudSavePaused"), true);
+  await assert.rejects(run(context, "loadCloudState()"));
+  assert.equal(run(context, "cloudSaveAttemptCount"), 3);
+  assert.equal(run(context, "cloudSavePaused"), true);
+  assert.equal(clock.timers.size, 0, "manual data load itself never auto-retries");
+  context.fetch = structuredFetchForState(fixture, 8);
+  await run(context, "loadCloudState().then(loaded => { state = loaded; })");
+  assert.equal(run(context, "cloudSaveAttemptCount"), 0);
+  assert.equal(run(context, "cloudSavePaused"), false);
+  const calls = installQuotaTestWriter(context);
+  await run(context, "flushCloudSave()");
+  assert.equal(calls.commits.length, 1);
+  assert.equal(run(context, "readPendingCloudState()"), null);
+});
+
+test("concurrent immediate saves join the in-flight request without polling or duplicate commits", async () => {
+  const { context, clock } = await retryTestContext();
+  const calls = installQuotaTestWriter(context);
+  const writer = context.fetch;
+  let release;
+  let reached;
+  const started = new Promise(resolve => { reached = resolve; });
+  context.fetch = async (url, request) => {
+    if (url.endsWith("documents:commit")) { reached(); await new Promise(resolve => { release = resolve; }); }
+    return writer(url, request);
+  };
+  const first = run(context, "flushCloudSave()");
+  await started;
+  const second = run(context, "saveStateNow()");
+  const third = run(context, "saveStateNow()");
+  assert.equal(clock.timers.size, 1, "only the request deadline, no polling timer");
+  release();
+  await Promise.all([first, second, third]);
+  await clock.advance(650);
+  assert.equal(calls.commits.length, 1);
+  assert.equal(clock.timers.size, 0);
+  assert.equal(run(context, "readPendingCloudState()"), null);
+});
+
+test("sign-out cancels scheduled retries and a late old save cannot reset the new session budget", async () => {
+  const { context, clock } = await retryTestContext();
+  let attempts = 0;
+  context.fetch = async () => { attempts += 1; return jsonResponse(503, {}); };
+  await run(context, "flushCloudSave()");
+  await run(context, "signOutFromFirebase()");
+  await clock.advance(60000);
+  assert.equal(attempts, 1);
+  assert.equal(clock.timers.size, 0);
+  assert.ok(run(context, "readPendingCloudState()"));
+
+  const next = await retryTestContext();
+  let release;
+  let reached;
+  const started = new Promise(resolve => { reached = resolve; });
+  next.context.fetch = () => { reached(); return new Promise(resolve => { release = resolve; }); };
+  const oldSave = run(next.context, "flushCloudSave()");
+  await started;
+  await run(next.context, "signOutFromFirebase()");
+  run(next.context, 'currentUser = { idToken: "new", localId: "new-user" }; cloudSaveInFlight = true; cloudSaveAttemptCount = 2; cloudSaveRetryAt = Date.now() + 15000');
+  release(jsonResponse(503, {}));
+  await oldSave;
+  assert.equal(run(next.context, "cloudSaveInFlight"), true);
+  assert.equal(run(next.context, "cloudSaveAttemptCount"), 2);
+  assert.ok(run(next.context, "cloudSaveRetryAt > Date.now()"));
+});
+
+test("request deadlines abort both hung fetches and hung response bodies without internal retries", async () => {
+  for (const hangAt of ["fetch", "body"]) {
+    const { context, clock } = await retryTestContext();
+    let signal;
+    let calls = 0;
+    context.fetch = async (url, request) => {
+      calls += 1;
+      signal = request.signal;
+      const never = new Promise(() => {});
+      return hangAt === "fetch" ? never : { ok: true, status: 200, json: () => never };
+    };
+    const pending = run(context, 'firebaseRequest("https://example.invalid")').catch(error => error);
+    await Promise.resolve();
+    await clock.advance(20000);
+    assert.equal((await pending).firebaseRequestTimeout, true);
+    assert.equal(signal.aborted, true);
+    assert.equal(calls, 1);
+    assert.equal(clock.timers.size, 0);
+  }
+});
+
+test("quota or permission headers remain non-retryable even when the error body stalls", async () => {
+  for (const status of [429, 403]) {
+    const { context, clock } = await retryTestContext();
+    context.fetch = async () => ({ ok: false, status, json: () => new Promise(() => {}) });
+    const save = run(context, "flushCloudSave()");
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    await clock.advance(20000);
+    await save;
+    assert.equal(run(context, "cloudSavePaused"), true);
+    assert.equal(run(context, "cloudSaveQuotaExceeded"), status === 429);
+    assert.equal(run(context, "cloudSaveAttemptCount"), 1);
+    assert.equal(clock.timers.size, 0);
+    assert.ok(run(context, "readPendingCloudState()"));
+  }
+});
+
+test("repeated collection page tokens fail closed instead of requesting the same page forever", async () => {
+  const context = createAppContext();
+  let calls = 0;
+  context.fetch = async () => { calls += 1; return jsonResponse(200, { documents: [], nextPageToken: "repeated" }); };
+  await assert.rejects(run(context, 'listFirestoreCollection("adSmashers/main", "players", "token")'), error => error.cloudSaveSafety);
+  assert.equal(calls, 2);
+});
+
+test("an unconfirmed commit never clears pending edits or advances the saved revision", async () => {
+  for (const payload of [{}, { commitTime: "invalid" }]) {
+    const { context, clock } = await retryTestContext();
+    context.fetch = async url => url.includes("/auditLogs?") ? jsonResponse(200, {}) : jsonResponse(200, payload);
+    await run(context, "flushCloudSave()");
+    assert.equal(run(context, "cloudSaveConflict"), true);
+    assert.equal(run(context, "cloudStateVersion"), 8);
+    assert.equal(run(context, "readPendingCloudState().state.players[0].name"), "Pending");
+    assert.equal(clock.timers.size, 0);
+  }
+});
+
+test("a committed save with a lost response is recovered without duplicating receipts or rewriting records", async () => {
+  const { context, clock } = await retryTestContext();
+  run(context, 'state.paymentTransactions.push({ id: "receipt-once", type: "advance", paidById: "p1", amount: 25, date: "2026-10-24", playerIds: ["p1"], allocations: [] }); persistPendingCloudState(state)');
+  let remote = jsonValue(context, "cloudStateBaseSnapshot");
+  let revision = 8;
+  let stamp = run(context, "cloudStateUpdateTime");
+  let attempts = 0;
+  let applied = 0;
+  context.fetch = async (url, request) => {
+    if (!url.endsWith("documents:commit")) return structuredFetchForState(remote, revision, stamp)(url, request);
+    attempts += 1;
+    const writes = JSON.parse(request.body).writes;
+    const root = writes.find(write => write.update?.name.endsWith("/adSmashers/main"));
+    if (root.currentDocument.updateTime !== stamp) return jsonResponse(409, { error: { status: "ABORTED" } });
+    for (const write of writes) {
+      const match = write.update?.name.match(/\/(players|paymentTransactions)\/[^/]+$/);
+      if (!match) continue;
+      context.__written = write.update;
+      const item = jsonValue(context, "firestoreObjectFromDocument(__written)");
+      const collection = remote[match[1]];
+      const existing = collection.findIndex(entry => entry.id === item.id);
+      if (existing >= 0) collection[existing] = item;
+      else collection.push(item);
+    }
+    revision += 1;
+    stamp = "2026-10-24T08:01:00.000000Z";
+    applied += 1;
+    throw new TypeError("Response lost after the atomic commit");
+  };
+  await run(context, "flushCloudSave()");
+  assert.ok(run(context, "readPendingCloudState()"));
+  await clock.advance(5000);
+  assert.equal(attempts, 2, "uncertain response retried with the old precondition, then reconciled");
+  assert.equal(applied, 1, "only one commit applied");
+  assert.equal(remote.paymentTransactions.filter(entry => entry.id === "receipt-once").length, 1);
+  assert.equal(run(context, 'state.paymentTransactions.filter(entry => entry.id === "receipt-once").length'), 1);
+  assert.equal(run(context, "cloudStateVersion"), 9);
+  assert.equal(run(context, "readPendingCloudState()"), null);
+  assert.equal(run(context, "lastCloudSaveError"), "");
+  assert.equal(clock.timers.size, 0);
+});
+
+test("pending edits survive exhausted retries and a new browser context while retaining unrelated remote edits", async () => {
+  const { context, fixture, clock } = await retryTestContext();
+  run(context, 'state.players[0].notes = "Local unsaved note"; persistPendingCloudState(state)');
+  context.fetch = async () => jsonResponse(503, {});
+  await run(context, "flushCloudSave()");
+  await clock.advance(20000);
+  const savedJournal = context.localStorage.getItem("ad-smashers-pending-cloud-state-v1");
+  assert.ok(savedJournal);
+  const refreshed = createAppContext();
+  refreshed.localStorage.setItem("ad-smashers-pending-cloud-state-v1", savedJournal);
+  const remote = { ...fixture, players: [{ ...fixture.players[0], phone: "remote-phone-edit" }, player("p2", "New remote player")] };
+  refreshed.fetch = structuredFetchForState(remote, 9);
+  await run(refreshed, "loadCloudState().then(loaded => { state = loaded; })");
+  assert.equal(run(refreshed, "state.players[0].name"), "Pending");
+  assert.equal(run(refreshed, "state.players[0].notes"), "Local unsaved note");
+  assert.equal(run(refreshed, "state.players[0].phone"), "remote-phone-edit");
+  assert.equal(run(refreshed, "state.players[1].name"), "New remote player");
+  const calls = installQuotaTestWriter(refreshed);
+  await run(refreshed, "flushCloudSave()");
+  assert.equal(calls.commits.length, 1);
+  assert.equal(calls.commits[0].writes.length, 3);
+  assert.equal(run(refreshed, "readPendingCloudState()"), null);
 });
 
 test("stale cloud saves are rejected and do not advance the local version", async () => {

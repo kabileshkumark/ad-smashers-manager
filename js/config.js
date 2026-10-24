@@ -3,10 +3,12 @@ const FIREBASE_AUTH_STORAGE_KEY = "ad-smashers-firebase-auth-v1";
 const FIREBASE_CLIENT_STORAGE_KEY = "ad-smashers-firebase-client-v1";
 const PENDING_CLOUD_STATE_STORAGE_KEY = "ad-smashers-pending-cloud-state-v1";
 const PENDING_CLOUD_JOURNAL_SCHEMA_VERSION = 1;
-const APP_VERSION = "1.0.24";
+const APP_VERSION = "1.0.25";
 const APP_BUILD_VERSION = APP_VERSION;
 const DATA_LOAD_ERROR_MESSAGE = "Could not load your data. Check your connection and try again.";
 const SIGN_IN_ERROR_MESSAGE = "Could not sign in. Check your connection and try again.";
+const SERVICE_LIMIT_MESSAGE = "The data service has reached its usage limit. Please try again later. Pending changes on this device are retained.";
+const SAVE_PAUSED_MESSAGE = "Saving is paused because your changes could not be synced. Automatic retries have stopped. Pending changes are retained on this device.";
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyD5Xv6DdYbH2bHhxePxcbRLBpoGLUjtzcE",
   authDomain: "home-kaish.firebaseapp.com",
