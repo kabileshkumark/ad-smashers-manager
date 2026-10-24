@@ -236,10 +236,6 @@ function loadState() {
   return emptyState();
 }
 
-function saveState() {
-  queueCloudSave();
-}
-
 function loadUiState() {
   try {
     const stored = localStorage.getItem(UI_STATE_KEY);

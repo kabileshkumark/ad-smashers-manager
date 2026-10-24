@@ -11,6 +11,14 @@ const FIRESTORE_COMMIT_MAX_WRITES = 500;
 const FIRESTORE_AUDIT_LOG_COLLECTION = "auditLogs";
 const AUDIT_LOG_RETENTION_DAYS = 30;
 const AUDIT_LOG_RETENTION_MS = AUDIT_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+const AUDIT_LOG_REFRESH_MS = 60 * 60 * 1000;
+let cloudSaveAuditCache = null;
+let cloudSaveQuotaExceeded = false;
+let cloudSavePaused = false;
+let cloudSaveAttemptCount = 0;
+let cloudSaveRetryAt = 0;
+let cloudSaveConflictRecoveryUsed = false;
+let cloudSaveOperation = null;
 const FIRESTORE_STRUCTURED_COLLECTIONS = [
   { stateKey: "groups", collectionId: "groups", includeItem: isSettingsGroup },
   { stateKey: "groups", collectionId: "archivedGroups", includeItem: (item) => !isSettingsGroup(item) },
@@ -25,7 +33,9 @@ const FIRESTORE_STRUCTURED_COLLECTIONS = [
 ];
 const PENDING_JOURNAL_COLLECTIONS = ["groups", "courts", "players", "sessions", "activities", "paymentGroups", "paymentTransactions"];
 const CLOUD_SAVE_DEBOUNCE_MS = 650;
-const CLOUD_SAVE_RETRY_MS = 5000;
+const CLOUD_SAVE_MAX_ATTEMPTS = 3;
+const CLOUD_SAVE_RETRY_DELAYS_MS = [5000, 15000];
+const FIREBASE_REQUEST_TIMEOUT_MS = 20000;
 const CLOUD_STATE_CONFLICT_MESSAGE = "Cloud data changed on another device. Reload before saving more changes.";
 const CLOUD_PENDING_STALE_MESSAGE = "Cloud data changed on another device. Loaded latest cloud data.";
 let cloudSessionGeneration = 0;
@@ -79,7 +89,7 @@ async function restoreFirebaseAuthSession() {
     refreshAdSmashersAccess(token);
     return currentUser;
   } catch (error) {
-    if (generation === cloudSessionGeneration) {
+    if (generation === cloudSessionGeneration && !error.serviceQuotaExceeded) {
       clearFirebaseAuthSession();
       currentUser = null;
     }
@@ -92,6 +102,9 @@ async function signOutFromFirebase() {
   clearTimeout(cloudSaveTimer);
   cloudSaveTimer = null;
   cloudSavePending = false;
+  cloudSaveInFlight = false;
+  cloudSaveOperation = null;
+  resetCloudSaveRetryState();
   resetCloudStateVersion();
   clearFirebaseAuthSession();
   currentUser = null;
@@ -211,7 +224,7 @@ function isSettingsGroup(item) {
   return SETTINGS_GROUP_IDS.includes(item?.id);
 }
 
-async function loadCloudState() {
+async function loadCloudState({ resetRetries = true } = {}) {
   const session = captureCloudSession();
   const token = await ensureFirebaseIdToken();
   assertCloudSession(session);
@@ -219,7 +232,9 @@ async function loadCloudState() {
   const cloudState = structuredState || (await loadLegacyCloudState(token, session));
   assertCloudSession(session);
   setCloudStateBaseSnapshot(cloudState);
-  return restorePendingCloudState(cloudState);
+  const restoredState = restorePendingCloudState(cloudState);
+  if (resetRetries) resetCloudSaveRetryState();
+  return restoredState;
 }
 
 async function loadStructuredCloudState(token, session = captureCloudSession()) {
@@ -335,89 +350,143 @@ function saveState() {
 }
 
 function queueCloudSave(delayMs = CLOUD_SAVE_DEBOUNCE_MS) {
+  if (!isAuthenticated() || cloudSaveConflict || cloudSavePaused || cloudSaveQuotaExceeded) return;
+  if (cloudSaveInFlight) {
+    cloudSavePending = true;
+    return;
+  }
+  // New edits must not shorten a retry's backoff or reset its attempt budget.
+  if (cloudSaveRetryAt && cloudSaveTimer) return;
   clearTimeout(cloudSaveTimer);
   cloudSaveTimer = setTimeout(() => {
-    flushCloudSave();
-  }, delayMs);
+    cloudSaveTimer = null;
+    return flushCloudSave();
+  }, Math.max(delayMs, cloudSaveRetryAt - Date.now()));
 }
 
 async function saveStateNow() {
   if (isAuthenticated() && !cloudSaveConflict) persistPendingCloudState(state);
-  clearTimeout(cloudSaveTimer);
-  cloudSaveTimer = null;
-  while (cloudSaveInFlight) {
+  const session = captureCloudSession();
+  if (cloudSaveOperation) {
     cloudSavePending = true;
-    await waitForCloudSaveTurn();
+    await cloudSaveOperation;
+    assertCloudSession(session);
     if (lastCloudSaveError) throw new Error(lastCloudSaveError);
   }
-  clearTimeout(cloudSaveTimer);
-  cloudSaveTimer = null;
   await flushCloudSave();
+  assertCloudSession(session);
   if (lastCloudSaveError) throw new Error(lastCloudSaveError);
 }
 
-function waitForCloudSaveTurn() {
-  return new Promise((resolve) => setTimeout(resolve, 50));
+function resetCloudSaveRetryState() {
+  clearTimeout(cloudSaveTimer);
+  cloudSaveTimer = null;
+  cloudSaveQuotaExceeded = false;
+  cloudSavePaused = false;
+  cloudSaveAttemptCount = 0;
+  cloudSaveRetryAt = 0;
+  cloudSaveConflictRecoveryUsed = false;
+}
+
+function isTransientCloudError(error) {
+  if (error.serviceQuotaExceeded || error.cloudSaveSafety || error.cloudStateConflict) return false;
+  if (error.status >= 400) return [408, 500, 502, 503, 504].includes(error.status);
+  return error.firebaseNetworkFailure === true || error.firebaseRequestTimeout === true;
 }
 
 async function flushCloudSave() {
   if (!isAuthenticated()) return;
+  if (cloudSaveQuotaExceeded || cloudSavePaused) {
+    lastCloudSaveError = cloudSaveQuotaExceeded ? SERVICE_LIMIT_MESSAGE : SAVE_PAUSED_MESSAGE;
+    return;
+  }
   if (cloudSaveConflict) {
     lastCloudSaveError = CLOUD_STATE_CONFLICT_MESSAGE;
     return;
   }
   if (cloudSaveInFlight) {
     cloudSavePending = true;
+    return cloudSaveOperation;
+  }
+  if (cloudSaveRetryAt > Date.now()) {
+    queueCloudSave();
     return;
   }
+  clearTimeout(cloudSaveTimer);
+  cloudSaveTimer = null;
+  cloudSaveRetryAt = 0;
   cloudSaveInFlight = true;
   const session = captureCloudSession();
+  cloudSaveOperation = performCloudSave(session);
+  return cloudSaveOperation;
+}
+
+async function performCloudSave(session) {
   lastCloudSaveError = "";
   try {
     await saveCloudStateWithJournalRecovery();
+    assertCloudSession(session);
+    resetCloudSaveRetryState();
+    cloudError = "";
   } catch (error) {
     if (error.cloudSessionChanged || session.generation !== cloudSessionGeneration) return;
     lastCloudSaveError = error.message || "Could not save your changes.";
-    if (error.cloudStateConflict || error.cloudSaveSafety) {
+    if (error.serviceQuotaExceeded) {
+      cloudSaveQuotaExceeded = true;
+      cloudSavePaused = true;
+      lastCloudSaveError = SERVICE_LIMIT_MESSAGE;
+      cloudError = SERVICE_LIMIT_MESSAGE;
+      cloudLoadFailed = true;
+      clearTimeout(cloudSaveTimer);
+      cloudSaveTimer = null;
+      render();
+    } else if (error.cloudStateConflict || error.cloudSaveSafety) {
       cloudSaveConflict = true;
       cloudError = lastCloudSaveError;
+      cloudLoadFailed = true;
       notifyCloudSyncError(lastCloudSaveError);
-    } else {
-      cloudError = "Cloud save is pending. Retrying...";
+      render();
+    } else if (isTransientCloudError(error) && cloudSaveAttemptCount < CLOUD_SAVE_MAX_ATTEMPTS) {
+      cloudSaveRetryAt = Date.now() + CLOUD_SAVE_RETRY_DELAYS_MS[cloudSaveAttemptCount - 1];
+      cloudError = "Changes are pending. A limited sync retry is scheduled.";
       cloudSavePending = true;
-      console.warn("Could not save Firestore state", error);
+    } else {
+      cloudSavePaused = true;
+      lastCloudSaveError = SAVE_PAUSED_MESSAGE;
+      cloudError = SAVE_PAUSED_MESSAGE;
+      cloudLoadFailed = true;
+      render();
     }
   } finally {
-    cloudSaveInFlight = false;
-    if (cloudSavePending && !cloudSaveConflict && session.generation === cloudSessionGeneration) {
-      const retryDelay = lastCloudSaveError ? CLOUD_SAVE_RETRY_MS : CLOUD_SAVE_DEBOUNCE_MS;
+    // A completed request from a signed-out session must not change the new session's queue.
+    if (session.generation === cloudSessionGeneration) {
+      cloudSaveInFlight = false;
+      cloudSaveOperation = null;
+      const pending = cloudSavePending;
       cloudSavePending = false;
-      queueCloudSave(retryDelay);
-    } else {
-      cloudSavePending = false;
+      if (pending) queueCloudSave();
     }
   }
 }
 
 async function saveCloudStateWithJournalRecovery() {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  while (cloudSaveAttemptCount < CLOUD_SAVE_MAX_ATTEMPTS) {
+    cloudSaveAttemptCount += 1;
     try {
       await saveCloudState(state);
       return;
     } catch (error) {
-      if (!error.cloudStateConflict || attempt > 0) throw error;
-      try {
-        await recoverCloudSaveConflict();
-      } catch (recoveryError) {
-        throw error;
-      }
+      if (!error.cloudStateConflict || cloudSaveConflictRecoveryUsed || cloudSaveAttemptCount >= CLOUD_SAVE_MAX_ATTEMPTS) throw error;
+      cloudSaveConflictRecoveryUsed = true;
+      await recoverCloudSaveConflict();
     }
   }
+  throw new Error(SAVE_PAUSED_MESSAGE);
 }
 
 async function recoverCloudSaveConflict() {
   const session = captureCloudSession();
-  const mergedState = await loadCloudState();
+  const mergedState = await loadCloudState({ resetRetries: false });
   assertCloudSession(session);
   state = mergedState;
   cloudSaveConflict = false;
@@ -428,17 +497,24 @@ async function recoverCloudSaveConflict() {
 async function saveCloudState(nextState) {
   // Capture data and its matching revision before any network request can yield.
   const saveStartedAtMs = Date.now();
+  const pendingAtStart = readPendingCloudState();
   const cleanState = migrateState(JSON.parse(JSON.stringify(nextState || emptyState())), { useSeedCollections: false });
   const context = captureCloudSaveContext();
   assertNonDestructiveCloudSave(cleanState, context.previousIds);
   const nextVersion = context.baseVersion + 1;
+  if (!structuredStateWrites(cleanState, nextVersion, [], context).writes.length) {
+    clearSavedPendingCloudState(saveStartedAtMs, pendingAtStart);
+    return;
+  }
   const token = await ensureFirebaseIdToken();
   assertCloudSaveContext(context);
-  const auditLogDocuments = await listFirestoreCollection(FIRESTORE_WORKSPACE_PATH, FIRESTORE_AUDIT_LOG_COLLECTION, token);
+  const auditLogDocuments = await loadCloudSaveAuditLogs(token, context.session);
   assertCloudSaveContext(context);
   const { writes, collectionIds } = structuredStateWrites(cleanState, nextVersion, auditLogDocuments, context);
   const updateTime = await commitFirestoreWrites(token, writes);
   assertCloudSaveContext(context);
+  const deletedNames = new Set(writes.map((write) => write.delete).filter(Boolean));
+  if (cloudSaveAuditCache) cloudSaveAuditCache.documents = cloudSaveAuditCache.documents.filter((doc) => !deletedNames.has(doc.name));
   cloudStateVersion = nextVersion;
   cloudStateUpdateTime = updateTime;
   cloudStateExists = true;
@@ -446,7 +522,20 @@ async function saveCloudState(nextState) {
   cloudSaveConflict = false;
   cloudStateNeedsMigrationSave = false;
   setCloudStateBaseSnapshot(cleanState);
-  clearSavedPendingCloudState(saveStartedAtMs);
+  clearSavedPendingCloudState(saveStartedAtMs, pendingAtStart);
+}
+
+async function loadCloudSaveAuditLogs(token, session) {
+  // Audit retention does not require rereading every audit record on every edit.
+  if (cloudSaveAuditCache?.generation === session.generation
+    && cloudSaveAuditCache.uid === session.uid
+    && Date.now() - cloudSaveAuditCache.fetchedAt < AUDIT_LOG_REFRESH_MS) {
+    return cloudSaveAuditCache.documents;
+  }
+  const documents = await listFirestoreCollection(FIRESTORE_WORKSPACE_PATH, FIRESTORE_AUDIT_LOG_COLLECTION, token);
+  assertCloudSession(session);
+  cloudSaveAuditCache = { ...session, fetchedAt: Date.now(), documents };
+  return documents;
 }
 
 function structuredStateWrites(cleanState, nextVersion, auditLogDocuments = [], context = captureCloudSaveContext()) {
@@ -455,6 +544,7 @@ function structuredStateWrites(cleanState, nextVersion, auditLogDocuments = [], 
   const expiresAt = new Date(createdAt.getTime() + AUDIT_LOG_RETENTION_MS);
   const clientId = getCloudClientId();
   const saveId = createId("cloud-save");
+  const baseline = context.baseState;
   const writes = [
     {
       update: {
@@ -475,18 +565,22 @@ function structuredStateWrites(cleanState, nextVersion, auditLogDocuments = [], 
         fieldPaths: ["appId", "name", "schemaVersion", "version", "updatedAt", "updatedBy", "clientId", "saveId", "collections"]
       },
       currentDocument: context.precondition
-    },
-    {
+    }
+  ];
+  if (!baseline || !valuesAreEqual(baseline.settings, cleanState.settings)) {
+    writes.push({
       update: {
         name: firestoreDocumentName(`${FIRESTORE_WORKSPACE_PATH}/settings/current`),
         fields: firestoreFieldsFromObject(cleanState.settings || {})
       }
-    }
-  ];
+    });
+  }
 
   FIRESTORE_STRUCTURED_COLLECTIONS.forEach((spec) => {
+    const previous = new Map(collectionItemsForSpec(baseline, spec).map((item) => [item.id, item]));
     collectionItemsForSpec(cleanState, spec).forEach((item) => {
       if (!item?.id) return;
+      if (baseline && context.previousIds[spec.collectionId]?.includes(item.id) && valuesAreEqual(previous.get(item.id), item)) return;
       writes.push({
         update: {
           name: firestoreDocumentName(`${FIRESTORE_WORKSPACE_PATH}/${spec.collectionId}/${item.id}`),
@@ -497,6 +591,7 @@ function structuredStateWrites(cleanState, nextVersion, auditLogDocuments = [], 
   });
 
   Object.entries(cleanState.advances || {}).forEach(([playerId, amount]) => {
+    if (baseline && context.previousIds.advances?.includes(playerId) && Number(baseline.advances?.[playerId]) === Number(amount)) return;
     writes.push({
       update: {
         name: firestoreDocumentName(`${FIRESTORE_WORKSPACE_PATH}/advances/${playerId}`),
@@ -508,9 +603,11 @@ function structuredStateWrites(cleanState, nextVersion, auditLogDocuments = [], 
     });
   });
 
-  writes.push(cloudSaveAuditWrite(saveId, clientId, nextVersion, collectionIds, createdAt, expiresAt, context));
   writes.push(...staleStructuredDeleteWrites(context.previousIds, collectionIds));
-  writes.push(...expiredAuditLogDeleteWrites(auditLogDocuments, createdAt));
+  if (baseline && writes.length === 1 && valuesAreEqual(context.previousIds, collectionIds)) return { writes: [], collectionIds };
+  writes.push(cloudSaveAuditWrite(saveId, clientId, nextVersion, collectionIds, createdAt, expiresAt, context));
+  // Retention work must not push an otherwise valid atomic save over its limit.
+  writes.push(...expiredAuditLogDeleteWrites(auditLogDocuments, createdAt).slice(0, Math.max(0, FIRESTORE_COMMIT_MAX_WRITES - writes.length)));
   return { writes, collectionIds };
 }
 
@@ -563,6 +660,7 @@ function captureCloudSaveContext() {
     recoveryId: cloudStateRecoveryId,
     precondition: cloudWritePrecondition(),
     previousIds: cloneCloudStateValue(cloudStructuredCollectionIds || emptyCloudCollectionIds()),
+    baseState: cloudStateExists && cloudStateUpdateTime && cloudStateBaseSnapshot ? cloneCloudStateValue(cloudStateBaseSnapshot) : null,
     actor: { uid: currentUser?.localId || "", email: currentUser?.email || "", role: currentUserRole || "" }
   };
 }
@@ -639,7 +737,7 @@ async function commitFirestoreWrites(token, writes) {
   if (writes.length > FIRESTORE_COMMIT_MAX_WRITES) {
     throw new Error(`Cloud save requires ${writes.length} writes; the atomic limit is ${FIRESTORE_COMMIT_MAX_WRITES}. No data was written.`);
   }
-  const response = await fetch(FIRESTORE_COMMIT_URL, {
+  const { response, payload } = await firebaseFetchJson(FIRESTORE_COMMIT_URL, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -648,18 +746,22 @@ async function commitFirestoreWrites(token, writes) {
     body: JSON.stringify({ writes })
   });
   if (!response.ok) {
-    const payload = await firebaseErrorPayload(response);
     if (isCloudVersionConflict(response, payload)) {
       throw cloudStateConflictError(firebaseErrorText(payload, response));
     }
-    throw new Error(firebaseErrorText(payload, response));
+    throw firebaseRequestError(payload, response);
   }
-  const payload = await response.json();
   const rootIndex = writes.findIndex((write) => write.update?.name === FIRESTORE_WORKSPACE_DOCUMENT_NAME);
-  return payload.writeResults?.[rootIndex]?.updateTime || payload.commitTime || "";
+  const updateTime = payload?.writeResults?.[rootIndex]?.updateTime || payload?.commitTime || "";
+  if (rootIndex >= 0 && (typeof updateTime !== "string" || !Number.isFinite(Date.parse(updateTime)))) {
+    throw cloudSaveSafetyError("The service did not confirm the saved revision. Pending changes are retained on this device.");
+  }
+  return updateTime;
 }
 
 function resetCloudStateVersion() {
+  cloudSaveAuditCache = null;
+  cloudSaveQuotaExceeded = false;
   cloudStateRecoveryId = "";
   cloudStateExists = false;
   cloudStateVersion = 0;
@@ -937,10 +1039,12 @@ function removePendingCloudState() {
   }
 }
 
-function clearSavedPendingCloudState(saveStartedAtMs) {
+function clearSavedPendingCloudState(saveStartedAtMs, pendingAtStart) {
   const pending = readPendingCloudState();
   if (!pending) return;
   const savedAtMs = pendingCloudStateSavedAtMs(pending);
+  // An edit can share the save's millisecond but still be absent from its payload.
+  if (!valuesAreEqual(pending, pendingAtStart)) return;
   if (!savedAtMs || savedAtMs <= saveStartedAtMs) removePendingCloudState();
 }
 
@@ -1080,35 +1184,37 @@ function notifyCloudSyncError(message) {
 }
 
 async function fetchFirestoreDocument(path, token, options = {}) {
-  const response = await fetch(firestoreDocumentUrl(path), {
+  const { response, payload } = await firebaseFetchJson(firestoreDocumentUrl(path), {
     headers: {
       Authorization: `Bearer ${token}`
     }
   });
   if (response.status === 404 && options.allowMissing) return null;
   if (!response.ok) {
-    throw new Error(await firebaseErrorMessage(response));
+    throw firebaseRequestError(payload, response);
   }
-  return response.json();
+  return payload;
 }
 
 async function listFirestoreCollection(parentPath, collectionId, token) {
   const documents = [];
+  const seenPageTokens = new Set();
   let pageToken = "";
   do {
     const tokenParam = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : "";
-    const response = await fetch(`${FIRESTORE_DOCUMENTS_URL}/${parentPath}/${collectionId}?pageSize=300${tokenParam}`, {
+    const { response, payload } = await firebaseFetchJson(`${FIRESTORE_DOCUMENTS_URL}/${parentPath}/${collectionId}?pageSize=300${tokenParam}`, {
       headers: {
         Authorization: `Bearer ${token}`
       }
     });
     if (response.status === 404) return documents;
     if (!response.ok) {
-      throw new Error(await firebaseErrorMessage(response));
+      throw firebaseRequestError(payload, response);
     }
-    const payload = await response.json();
     documents.push(...(payload.documents || []));
     pageToken = payload.nextPageToken || "";
+    if (pageToken && seenPageTokens.has(pageToken)) throw cloudSaveSafetyError("The saved records could not be fully loaded. Saving is paused.");
+    seenPageTokens.add(pageToken);
   } while (pageToken);
   return documents;
 }
@@ -1151,7 +1257,7 @@ function cloudCollectionIdsFromState(sourceState = {}) {
 }
 
 function collectionItemsForSpec(sourceState = {}, spec = {}) {
-  const items = Array.isArray(sourceState[spec.stateKey]) ? sourceState[spec.stateKey] : [];
+  const items = Array.isArray(sourceState?.[spec.stateKey]) ? sourceState[spec.stateKey] : [];
   return spec.includeItem ? items.filter((item) => spec.includeItem(item)) : items;
 }
 
@@ -1296,23 +1402,60 @@ async function firebaseRequest(url, options = {}) {
     request.headers["Content-Type"] = "application/x-www-form-urlencoded";
     request.body = new URLSearchParams(options.form).toString();
   }
-  const response = await fetch(url, request);
+  const { response, payload } = await firebaseFetchJson(url, request);
   if (!response.ok) {
-    throw new Error(await firebaseErrorMessage(response));
+    throw firebaseRequestError(payload, response);
   }
-  return response.json();
+  return payload;
 }
 
-async function firebaseErrorMessage(response) {
-  return firebaseErrorText(await firebaseErrorPayload(response), response);
-}
-
-async function firebaseErrorPayload(response) {
+async function firebaseFetchJson(url, request) {
+  const controller = new AbortController();
+  let timeout;
+  let response;
+  const deadline = new Promise((resolve, reject) => {
+    timeout = setTimeout(() => {
+      const error = new Error("The data request timed out.");
+      error.firebaseRequestTimeout = true;
+      reject(error);
+      controller.abort();
+    }, FIREBASE_REQUEST_TIMEOUT_MS);
+  });
   try {
-    return await response.json();
+    // The deadline covers response-body reads too. This layer never retries requests.
+    return await Promise.race([deadline, (async () => {
+      response = await fetch(url, { ...request, signal: controller.signal });
+      let payload;
+      try {
+        payload = await response.json();
+      } catch (error) {
+        if (response.ok || controller.signal.aborted) throw error;
+        payload = null;
+      }
+      return { response, payload };
+    })()]);
   } catch (error) {
-    return null;
+    if (response) {
+      error.status = response.status;
+      error.serviceQuotaExceeded = response.status === 429;
+    }
+    if (error?.name === "TypeError") error.firebaseNetworkFailure = true;
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
+}
+
+function firebaseRequestError(payload, response) {
+  const error = new Error(firebaseErrorText(payload, response));
+  error.status = response.status;
+  error.code = payload?.error?.status || "";
+  error.serviceQuotaExceeded = response.status === 429 || error.code === "RESOURCE_EXHAUSTED";
+  return error;
+}
+
+function userFacingDataLoadError(error) {
+  return error?.serviceQuotaExceeded ? SERVICE_LIMIT_MESSAGE : DATA_LOAD_ERROR_MESSAGE;
 }
 
 function firebaseErrorText(payload, response) {

@@ -89,7 +89,7 @@ function renderCloudLoadError() {
           </div>
         </div>
         <p class="login-copy">This device could not verify your saved data. The app is paused to avoid saving incomplete records.</p>
-        <p class="login-error" role="alert">${escapeHtml(DATA_LOAD_ERROR_MESSAGE)}</p>
+        <p class="login-error" role="alert">${escapeHtml([SERVICE_LIMIT_MESSAGE, SAVE_PAUSED_MESSAGE].includes(cloudError) ? cloudError : DATA_LOAD_ERROR_MESSAGE)}</p>
         <div class="toolbar">
           <button class="btn primary" type="button" data-action="retry-cloud-load">Retry Data Load</button>
           <button class="btn" type="button" data-action="check-app-update">Refresh App Files</button>

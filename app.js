@@ -74,7 +74,7 @@ async function initializeApp() {
     }
   } catch (error) {
     console.error("App data load failed", error);
-    cloudError = DATA_LOAD_ERROR_MESSAGE;
+    cloudError = userFacingDataLoadError(error);
     cloudLoadFailed = isAuthenticated();
   } finally {
     authLoading = false;

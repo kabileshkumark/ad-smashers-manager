@@ -2,6 +2,7 @@ let voteDragState = null;
 let viewNavigationPending = false;
 
 function userFacingSignInError(error) {
+  if (error?.serviceQuotaExceeded) return SERVICE_LIMIT_MESSAGE;
   const message = String(error?.message || "");
   const safeMessages = new Set([
     "Email or password is incorrect.",
@@ -360,6 +361,7 @@ function handleClick(event) {
   }
 
   if (action === "retry-cloud-load") {
+    if (cloudLoading || cloudSaveInFlight) return;
     if (!isAuthenticated()) {
       cloudLoadFailed = false;
       cloudError = "";
@@ -370,7 +372,9 @@ function handleClick(event) {
     cloudLoadFailed = false;
     cloudLoading = true;
     render();
-    loadCloudState()
+    ensureFirebaseIdToken()
+      .then((token) => prepareAdSmashersAccess(token))
+      .then(() => loadCloudState())
       .then((loadedState) => {
         state = loadedState;
         cloudError = "";
@@ -382,7 +386,7 @@ function handleClick(event) {
       })
       .catch((error) => {
         console.error("App data retry failed", error);
-        cloudError = DATA_LOAD_ERROR_MESSAGE;
+        cloudError = userFacingDataLoadError(error);
         cloudLoadFailed = true;
         cloudLoading = false;
         render();
@@ -1319,9 +1323,10 @@ async function handleSubmit(event) {
       console.error("Sign in failed", error);
       authLoading = false;
       cloudLoading = false;
-      currentUser = null;
-      cloudLoadFailed = false;
-      loginError = userFacingSignInError(error);
+      // Authentication may have succeeded before membership or data loading failed.
+      cloudLoadFailed = isAuthenticated();
+      cloudError = cloudLoadFailed ? userFacingDataLoadError(error) : "";
+      loginError = cloudLoadFailed ? "" : userFacingSignInError(error);
       render();
     }
     return;
