@@ -2119,7 +2119,7 @@ function paymentReminderFunding(playerIds, snapshot, chargeItems) {
     const type = source.type === "advance" ? "Advance" : "Credit";
     const activity = source.activityId ? state.activities.find((item) => item.id === source.activityId) : null;
     contributions.set(fundingKey(type, payerId, source.id), {
-      type, payerId, date: source.date || "", description: activity?.name || "",
+      type, payerId, activityId: activity?.id || "", date: source.date || "", description: activity?.name || "",
       available: recipients.has(payerId) ? ledgerMoney(source.remaining) : 0
     });
   }));
@@ -2141,7 +2141,7 @@ function paymentReminderFunding(playerIds, snapshot, chargeItems) {
     const source = snapshot.coverageSourcesByPlayer.get(charge.playerId)?.find((row) => row.activityId === item.activityId && row.type === "advance");
     const sourceKey = source ? fundingKey("Advance", charge.playerId, source.id) : `activity-payment:${item.activityId}:${charge.playerId}`;
     if (!source) contributions.set(sourceKey, {
-      type: "Activity payment", payerId: charge.playerId, date: item.date || "", description: item.label, available: 0
+      type: "Activity payment", payerId: charge.playerId, activityId: item.activityId, date: item.date || "", description: item.label, available: 0
     });
     allocations.push({ itemKey: charge.key, sourceKey, amount: charge.directActivityPaid, date: item.date || "" });
     const settlement = settlements.get(charge.key);
@@ -2212,7 +2212,26 @@ function paymentReminderPeriod(chargeItems, funding) {
 
 function buildPaymentDueStatementCopy(name, playerIds, snapshot, { memberNames = "", individual = false } = {}) {
   const chargeItems = paymentSummaryChargeItems(playerIds, { includeDirectActivityPayments: true });
-  const { items, contributions, startDate } = paymentReminderPeriod(chargeItems, paymentReminderFunding(playerIds, snapshot, chargeItems));
+  const { items, contributions: fundingRows, startDate } = paymentReminderPeriod(chargeItems, paymentReminderFunding(playerIds, snapshot, chargeItems));
+  // A payer's own activity share and derived Credit represent one contribution.
+  const activityRows = new Map();
+  const contributions = [];
+  fundingRows.forEach((row) => {
+    if (!row.activityId || !["Activity payment", "Credit"].includes(row.type)) {
+      contributions.push(row);
+      return;
+    }
+    const key = JSON.stringify([row.activityId, row.payerId]);
+    const existing = activityRows.get(key);
+    if (existing) {
+      existing.amount = ledgerMoney(existing.amount + row.amount);
+      existing.carriedForward = existing.carriedForward && row.carriedForward;
+    } else {
+      const combined = { ...row, type: "Activity payment" };
+      activityRows.set(key, combined);
+      contributions.push(combined);
+    }
+  });
   const totalContributions = ledgerMoney(contributions.reduce((sum, row) => sum + row.amount, 0));
   const totalUsed = ledgerMoney(items.reduce((sum, item) => sum + item.charges.reduce((subtotal, charge) => subtotal + charge.amount, 0), 0));
   const coverage = paymentSummaryCoverage(playerIds, snapshot);
@@ -2220,15 +2239,14 @@ function buildPaymentDueStatementCopy(name, playerIds, snapshot, { memberNames =
   const lines = [`*Payment Reminder - ${name}*`];
   if (memberNames) lines.push(`Members: ${memberNames}`);
   if (!individual && startDate) lines.push(`From: ${formatDate(startDate)}`);
-  if (!individual || contributions.length) lines.push("", "*Contributions*");
-  if (!individual && !contributions.length) lines.push("No contributions for this period.");
+  if (contributions.length) lines.push("", "*Contributions*");
   contributions.forEach((row) => {
     const date = row.date ? `${formatDate(row.date)} - ` : "";
     const description = row.description ? ` - ${row.description}` : "";
     const owner = row.payerId ? getPlayerName(row.payerId) : `For ${getPlayerName(row.playerId)}`;
     lines.push(`- ${date}${owner}${description} (${row.type}${row.carriedForward ? " carried forward" : ""}): ${currency(row.amount)}`);
   });
-  if (!individual || contributions.length > 1) lines.push("", `*Total Contributions: ${currency(totalContributions)}*`);
+  if (contributions.length && (!individual || contributions.length > 1)) lines.push("", `*Total Contributions: ${currency(totalContributions)}*`);
   if (!individual) lines.push("", "*Usage by member*");
   let usageCount = 0;
   playerIds.forEach((playerId) => {

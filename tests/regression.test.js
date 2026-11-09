@@ -1695,9 +1695,9 @@ test("due statements keep the last-cleared period with compact individual and de
       assert.doesNotMatch(text, /From:|Contributions|Usage by member|A total:|Total Used:/);
     } else {
       assert.match(text, /From: Fri, Sep 25/);
-      assert.match(text, /Total Contributions: 0 AED/);
+      assert.doesNotMatch(text, /Contributions|No contributions/);
       assert.match(text, /Total Used: 100 AED/);
-      const sections = ["*Contributions*", "*Total Contributions:", "*Usage by member*", "*A total:", "*Total Used:", "*Amount Due:"];
+      const sections = ["*Usage by member*", "*A total:", "*Total Used:", "*Amount Due:"];
       sections.forEach((section, index) => { if (index) assert.ok(text.indexOf(sections[index - 1]) < text.indexOf(section)); });
     }
   }
@@ -1970,8 +1970,7 @@ test("reminder scopes applied Credit to recipients and shows unused Credit only 
   run(context, 'state.advances = {}');
   const after = run(context, 'buildPaymentGroupReminderCopy("summary-group")');
   assert.doesNotMatch(after, /\(Credit\)/);
-  assert.match(after, /No contributions for this period/);
-  assert.match(after, /Total Contributions: 0 AED/);
+  assert.doesNotMatch(after, /Contributions|No contributions/);
   assert.match(after, /Amount Due: 50 AED/);
   assert.match(after, /Aani/);
 });
@@ -1986,14 +1985,41 @@ test("activity Credit keeps its payer and activity label in due reminder contrib
   fixture.activities = [{id:"taxi",name:"Taxi",date:"2026-09-26",totalPaid:60,paidById:"a",contributions:[{playerId:"a",amount:60}],playerIds:["a","b","owner"],splitMode:"equal"}];
   setAppState(context, fixture);
   const text = run(context, 'buildPaymentGroupReminderCopy("summary-group")');
-  assert.match(text, /A - Taxi \(Credit\): 40 AED/);
-  assert.match(text, /A - Taxi \(Activity payment\): 20 AED/);
+  assert.match(text, /A - Taxi \(Activity payment\): 60 AED/);
   assert.match(text, /Total Contributions: 60 AED/);
-  assert.doesNotMatch(text, /Taxi \(Credit\): 60 AED|Credit applied:|Credit created:/);
+  assert.doesNotMatch(text, /Taxi \(Credit\)|Credit applied:|Credit created:/);
   assert.doesNotMatch(text, /Taxi: paid 60 AED|Own share:|Member payments/);
   assert.match(text, /Taxi: 20 AED/);
   assert.match(text, /Total Used: 240 AED/);
   assert.match(text, /Amount Due: 180 AED/);
+});
+
+test("activity contribution display keeps separate payers and same-name activities without changing balances", () => {
+  const context = createAppContext();
+  installFakeDate(context, "2026-09-27T12:00:00Z");
+  const fixture = groupSummaryFixture(["a", "b"], 100);
+  fixture.sessions[0].date = "2026-09-25";
+  fixture.players.push(player("owner", "Organizer"));
+  fixture.settings.organizerPlayerId = "owner";
+  fixture.activities = [
+    {id:"taxi-1",name:"Taxi",date:"2026-09-26",totalPaid:60,contributions:[{playerId:"a",amount:60}],playerIds:["a","b","owner"],splitMode:"equal"},
+    {id:"taxi-2",name:"Taxi",date:"2026-09-26",totalPaid:60,contributions:[{playerId:"a",amount:30},{playerId:"b",amount:30}],playerIds:["a","b","owner"],splitMode:"equal"}
+  ];
+  setAppState(context, fixture);
+  const before = jsonValue(context, "state");
+  const balances = jsonValue(context, "[...buildLedgerCoverageSnapshot().players]");
+  const text = run(context, 'buildPaymentGroupReminderCopy("summary-group")');
+  assert.match(text, /A - Taxi \(Activity payment\): 60 AED/);
+  assert.match(text, /A - Taxi \(Activity payment\): 30 AED/);
+  assert.match(text, /B - Taxi \(Activity payment\): 30 AED/);
+  assert.equal((text.match(/Taxi \(Activity payment\)/g) || []).length, 3);
+  assert.doesNotMatch(text, /Taxi \(Credit\)/);
+  assert.match(text, /Total Contributions: 120 AED/);
+  assert.match(text, /Total Used: 280 AED/);
+  assert.match(text, /Amount Due: 160 AED/);
+  for (const ids of [["a"], ["b"], ["a", "b"]]) assertDueStatementReconciles(context, ids);
+  assert.deepEqual(jsonValue(context, "state"), before);
+  assert.deepEqual(jsonValue(context, "[...buildLedgerCoverageSnapshot().players]"), balances);
 });
 
 test("due reminders include Aani instructions once only when payment is due", () => {
